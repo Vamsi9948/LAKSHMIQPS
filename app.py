@@ -729,5 +729,5 @@ if tab6 is not None:
         if pending_map_df.empty:
             st.success("All locked gifts for this Parent Company have been delivered!")
         else:
-            st.dataframe(pending_map_df[['ParentCompanyName', 'CompanyName', 'customermobile', 'selected_gift']], use_container_width=True
+            st.dataframe(pending_map_df[['ParentCompanyName', 'CompanyName', 'customermobile', 'selected_gift']], use_container_width=True)
                         
