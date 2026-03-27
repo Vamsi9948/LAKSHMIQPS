@@ -19,9 +19,15 @@ st.set_page_config(page_title="Gift Selection App", page_icon="🎁", layout="wi
 # --- HIDE STREAMLIT UI ---
 hide_st_style = """
             <style>
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            header {visibility: hidden;}
+            /* Hide the completely top menu bar and app decoration */
+            header {visibility: hidden !important;}
+            [data-testid="stHeader"] {display: none !important;}
+            [data-testid="stDecoration"] {display: none !important;}
+            [data-testid="stToolbar"] {display: none !important;}
+
+            /* Hide the Hosted with Streamlit footer */
+            footer {visibility: hidden !important;}
+            [data-testid="stFooter"] {display: none !important;}
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
