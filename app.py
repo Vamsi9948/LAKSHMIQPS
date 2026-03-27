@@ -16,6 +16,15 @@ except ImportError:
     streamlit_geolocation = None
 
 st.set_page_config(page_title="Gift Selection App", page_icon="🎁", layout="wide")
+# --- HIDE STREAMLIT UI ---
+hide_st_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            </style>
+            """
+st.markdown(hide_st_style, unsafe_allow_html=True)
 
 # --- 1. CONNECT TO POSTGRESQL SECURELY ---
 DATABASE_URL = os.environ.get("DB_URL")
@@ -648,6 +657,10 @@ if tab6 is not None:
                 lat_buffer = (max_lat - min_lat) * 0.1 if max_lat != min_lat else 0.01
                 lon_buffer = (max_lon - min_lon) * 0.1 if max_lon != min_lon else 0.01
 
+                # Calculate the exact center of all your deliveries
+                center_lat = delivered_map_df['Lat'].mean()
+                center_lon = delivered_map_df['Lon'].mean()
+
                 fig = px.scatter_mapbox(
                     delivered_map_df,
                     lat="Lat",
@@ -660,10 +673,24 @@ if tab6 is not None:
                         "Lon": False,
                         "customermobile": False
                     },
-                    color_discrete_sequence=["#00b84c"], # Beautiful Green Color
+                    color_discrete_sequence=["#00b84c"], # Beautiful Green Pin
                     height=600
                 )
                 
+                fig.update_traces(marker=dict(size=22, opacity=0.9)) 
+                
+                # We use 'center' and 'zoom' now, which allows free scrolling!
+                fig.update_layout(
+                    mapbox_style="open-street-map",
+                    margin={"r":0,"t":0,"l":0,"b":0},
+                    mapbox=dict(
+                        center=dict(lat=center_lat, lon=center_lon),
+                        zoom=10 # Starting zoom level
+                    )
+                )
+                
+                # We also turn off the extra Plotly toolbars to keep it looking clean, but enable scroll zoom
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False, 'scrollZoom': True})                
                 # Make the marker massive so it looks like a clear pin/bubble, not a dot
                 fig.update_traces(marker=dict(size=22, opacity=0.9)) 
                 
