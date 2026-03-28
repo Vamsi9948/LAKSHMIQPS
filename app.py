@@ -28,6 +28,12 @@ hide_st_style = """
             /* Hide the Hosted with Streamlit footer */
             footer {visibility: hidden !important;}
             [data-testid="stFooter"] {display: none !important;}
+            
+            /* Hide the floating Streamlit Cloud Viewer Badge in the bottom right */
+            .viewerBadge_container {display: none !important;}
+            .viewerBadge_link {display: none !important;}
+            [data-testid="stViewerBadge"] {display: none !important;}
+            #viewerBadge {display: none !important;}
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
