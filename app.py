@@ -7,7 +7,8 @@ import time
 import base64
 from datetime import datetime
 from geopy.geocoders import Nominatim
-import plotly.express as px
+import folium
+from streamlit_folium import st_folium
 
 # Import the geolocation plugin safely
 try:
@@ -638,7 +639,7 @@ with tab5:
 if tab6 is not None:
     with tab6:
         st.subheader("🗺️ Admin Delivery Map & Proofs")
-        st.write("Visually track your successful deliveries on the map below. The map will auto-zoom to your selection.")
+        st.write("Hover over the delivery trucks to see the proof photo and address!")
         
         # 1. Map Filter
         parents_map = ["All Parent Companies"] + sorted(base_df['ParentCompanyName'].dropna().unique().tolist())
@@ -652,72 +653,56 @@ if tab6 is not None:
         delivered_map_df = map_df[map_df['delivery_status'] == 'Delivered'].copy()
         pending_map_df = map_df[(map_df['selected_gift'].str.strip() != "") & (map_df['delivery_status'] != 'Delivered')]
         
-        # 2. Render the Map
+        # 2. Render the Custom Folium Map
         if not delivered_map_df.empty:
             delivered_map_df['Lat'] = pd.to_numeric(delivered_map_df['delivery_lat'], errors='coerce')
             delivered_map_df['Lon'] = pd.to_numeric(delivered_map_df['delivery_lon'], errors='coerce')
             delivered_map_df = delivered_map_df.dropna(subset=['Lat', 'Lon'])
             
             if not delivered_map_df.empty:
-                # Calculate the exact boundaries to Auto-Zoom the map
-                min_lat = delivered_map_df['Lat'].min()
-                max_lat = delivered_map_df['Lat'].max()
-                min_lon = delivered_map_df['Lon'].min()
-                max_lon = delivered_map_df['Lon'].max()
-                
-                # Add a tiny buffer so pins on the edge aren't cut off
-                lat_buffer = (max_lat - min_lat) * 0.1 if max_lat != min_lat else 0.01
-                lon_buffer = (max_lon - min_lon) * 0.1 if max_lon != min_lon else 0.01
-
-                # Calculate the exact center of all your deliveries
+                # Center the map automatically
                 center_lat = delivered_map_df['Lat'].mean()
                 center_lon = delivered_map_df['Lon'].mean()
-
-                fig = px.scatter_mapbox(
-                    delivered_map_df,
-                    lat="Lat",
-                    lon="Lon",
-                    hover_name="CompanyName",
-                    hover_data={
-                        "selected_gift": True, 
-                        "delivery_time": True, 
-                        "Lat": False, 
-                        "Lon": False,
-                        "customermobile": False
-                    },
-                    color_discrete_sequence=["#00b84c"], # Beautiful Green Pin
-                    height=600
-                )
                 
-                fig.update_traces(marker=dict(size=22, opacity=0.9)) 
+                # Create the base map
+                m = folium.Map(location=[center_lat, center_lon], zoom_start=11)
                 
-                # We use 'center' and 'zoom' now, which allows free scrolling!
-                fig.update_layout(
-                    mapbox_style="open-street-map",
-                    margin={"r":0,"t":0,"l":0,"b":0},
-                    mapbox=dict(
-                        center=dict(lat=center_lat, lon=center_lon),
-                        zoom=10 # Starting zoom level
-                    )
-                )
+                # Plot each delivery truck
+                for idx, row in delivered_map_df.iterrows():
+                    photo_b64 = row.get('delivery_photo', '')
+                    addr = row.get('delivery_address', 'Address not recorded')
+                    comp = row['CompanyName']
+                    gift = row['selected_gift']
+                    
+                    # Create the Image HTML if the photo exists
+                    if photo_b64:
+                        img_html = f'<img src="data:image/jpeg;base64,{photo_b64}" style="width: 200px; border-radius: 5px; margin-top: 8px; border: 1px solid #ddd;">'
+                    else:
+                        img_html = '<p style="font-size:10px; color:gray; font-style:italic;">No photo available</p>'
+                    
+                    # Build the Hover Card
+                    hover_html = f'''
+                    <div style="width: 200px; font-family: sans-serif;">
+                        <h4 style="color: #00b84c; margin: 0 0 5px 0;">{comp}</h4>
+                        <p style="font-size: 11px; color: #555; margin: 0 0 5px 0;">📍 {addr}</p>
+                        <p style="font-size: 11px; color: #333; margin: 0 0 5px 0;"><b>🎁 Gift:</b> {gift}</p>
+                        {img_html}
+                    </div>
+                    '''
+                    
+                    # Create the Delivery Truck Icon
+                    custom_icon = folium.Icon(color="green", icon="truck", prefix="fa")
+                    
+                    # Add to map
+                    folium.Marker(
+                        location=[row['Lat'], row['Lon']],
+                        icon=custom_icon,
+                        tooltip=folium.Tooltip(hover_html)
+                    ).add_to(m)
                 
-                # We also turn off the extra Plotly toolbars to keep it looking clean, but enable scroll zoom
-                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False, 'scrollZoom': True})                
-                # Make the marker massive so it looks like a clear pin/bubble, not a dot
-                fig.update_traces(marker=dict(size=22, opacity=0.9)) 
+                # Render the map in Streamlit (returned_objects=[] makes it run much faster)
+                st_folium(m, use_container_width=True, height=600, returned_objects=[])
                 
-                fig.update_layout(
-                    mapbox_style="open-street-map",
-                    margin={"r":0,"t":0,"l":0,"b":0},
-                    # This command forces the map to zoom to the exact area of the selected company
-                    mapbox_bounds={
-                        "west": min_lon - lon_buffer, 
-                        "east": max_lon + lon_buffer, 
-                        "south": min_lat - lat_buffer, 
-                        "north": max_lat + lat_buffer
-                    }
-                )
-                st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("No valid GPS coordinates found to plot on the map yet.")
         else:
@@ -769,4 +754,3 @@ if tab6 is not None:
             st.success("All locked gifts for this Parent Company have been delivered!")
         else:
             st.dataframe(pending_map_df[['ParentCompanyName', 'CompanyName', 'customermobile', 'selected_gift']], use_container_width=True)
-                        
