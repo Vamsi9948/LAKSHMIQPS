@@ -9,28 +9,19 @@ from datetime import datetime
 from geopy.geocoders import Nominatim
 import folium
 from streamlit_folium import st_folium
+import extra_streamlit_components as stx  # <-- NEW: The Cookie Manager
 
-# Import the geolocation plugin safely
-try:
-    from streamlit_geolocation import streamlit_geolocation
-except ImportError:
-    streamlit_geolocation = None
-
-st.set_page_config(page_title="Gift Selection App", page_icon="🎁", layout="wide")
 # --- HIDE STREAMLIT UI ---
+st.set_page_config(page_title="Gift Selection App", page_icon="🎁", layout="wide")
+
 hide_st_style = """
             <style>
-            /* Hide the completely top menu bar and app decoration */
             header {visibility: hidden !important;}
             [data-testid="stHeader"] {display: none !important;}
             [data-testid="stDecoration"] {display: none !important;}
             [data-testid="stToolbar"] {display: none !important;}
-
-            /* Hide the Hosted with Streamlit footer */
             footer {visibility: hidden !important;}
             [data-testid="stFooter"] {display: none !important;}
-            
-            /* Hide the floating Streamlit Cloud Viewer Badge in the bottom right */
             .viewerBadge_container {display: none !important;}
             .viewerBadge_link {display: none !important;}
             [data-testid="stViewerBadge"] {display: none !important;}
@@ -64,7 +55,6 @@ try:
     gifts['SLAB'] = pd.to_numeric(gifts['SLAB'], errors='coerce')
     gifts.loc[gifts['SLAB'] == 10000000, 'SLAB'] = 1000000
     
-    # DATABASE UPDATER
     columns_to_add = {
         'selected_gift': "TEXT",
         'delivery_status': "TEXT DEFAULT 'Pending'",
@@ -90,15 +80,40 @@ try:
                 customers[col] = customers[col].fillna("")
         
 except Exception as e:
-    st.error(f"Database connection failed. Please refresh the page. Details: {e}")
+    st.error(f"Database connection failed. Details: {e}")
     st.stop()
 
-# --- 2. SESSION STATE ---
+# --- 2. SESSION STATE & COOKIE MANAGER ---
+@st.cache_resource(experimental_allow_widgets=True)
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
+
+# Wait a fraction of a second for cookies to load
+time.sleep(0.1) 
+
 if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.username = None
-    st.session_state.role = None
-    st.session_state.scope = None
+    # Check if they have a saved cookie from a previous session
+    saved_role = cookie_manager.get(cookie="user_role")
+    
+    if saved_role:
+        st.session_state.logged_in = True
+        st.session_state.role = cookie_manager.get(cookie="user_role")
+        
+        # Scope might be a number for PCID, so we try to convert it back
+        raw_scope = cookie_manager.get(cookie="user_scope")
+        try:
+            st.session_state.scope = int(raw_scope)
+        except:
+            st.session_state.scope = raw_scope
+            
+        st.session_state.username = cookie_manager.get(cookie="username")
+    else:
+        st.session_state.logged_in = False
+        st.session_state.username = None
+        st.session_state.role = None
+        st.session_state.scope = None
 
 # --- 3. LOGIN UI ---
 if not st.session_state.logged_in:
@@ -112,26 +127,44 @@ if not st.session_state.logged_in:
         
         if submitted:
             if username.lower() == 'admin' and password == 'admin123':
+                # Save to Session
                 st.session_state.logged_in = True
                 st.session_state.role = 'admin'
                 st.session_state.scope = 'ALL'
                 st.session_state.username = 'Admin'
+                # Save to Cookies (Expires in 30 days)
+                cookie_manager.set("user_role", "admin", key="set_role1")
+                cookie_manager.set("user_scope", "ALL", key="set_scope1")
+                cookie_manager.set("username", "Admin", key="set_name1")
+                time.sleep(0.5)
                 st.rerun()
+                
             elif username.upper() in customers['ParentCompanyDistrict'].dropna().unique():
                 if password == '1234':
                     st.session_state.logged_in = True
                     st.session_state.role = 'district'
                     st.session_state.scope = username.upper()
                     st.session_state.username = username.upper()
+                    
+                    cookie_manager.set("user_role", "district", key="set_role2")
+                    cookie_manager.set("user_scope", username.upper(), key="set_scope2")
+                    cookie_manager.set("username", username.upper(), key="set_name2")
+                    time.sleep(0.5)
                     st.rerun()
                 else:
                     st.error("Incorrect password for District.")
+                    
             elif username.isdigit() and int(username) in customers['pcidd'].dropna().unique():
                 if password == '1234':
                     st.session_state.logged_in = True
                     st.session_state.role = 'parent_company'
                     st.session_state.scope = int(username)
                     st.session_state.username = f"PCID - {username}"
+                    
+                    cookie_manager.set("user_role", "parent_company", key="set_role3")
+                    cookie_manager.set("user_scope", str(username), key="set_scope3")
+                    cookie_manager.set("username", f"PCID - {username}", key="set_name3")
+                    time.sleep(0.5)
                     st.rerun()
                 else:
                     st.error("Incorrect password for Parent Company.")
@@ -144,21 +177,15 @@ st.sidebar.title(f"Welcome, {st.session_state.username}")
 st.sidebar.markdown(f"**Role:** {st.session_state.role.title()}")
 
 if st.sidebar.button("Log Out"):
+    # Delete cookies when they log out so it actually stays logged out
+    cookie_manager.delete("user_role", key="del_role")
+    cookie_manager.delete("user_scope", key="del_scope")
+    cookie_manager.delete("username", key="del_name")
     st.session_state.clear()
+    time.sleep(0.5)
     st.rerun()
 
 st.title("🎁 Gift Allocation Dashboard")
-
-if st.session_state.role == 'admin':
-    base_df = customers
-elif st.session_state.role == 'district':
-    base_df = customers[customers['ParentCompanyDistrict'] == st.session_state.scope]
-elif st.session_state.role == 'parent_company':
-    base_df = customers[customers['pcidd'] == st.session_state.scope]
-
-if base_df.empty:
-    st.warning("No customers assigned to your account.")
-    st.stop()
 
 # Dynamic Tabs based on Role
 if st.session_state.role == 'admin':
