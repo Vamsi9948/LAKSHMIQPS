@@ -120,9 +120,15 @@ if not st.session_state.logged_in:
         
         if submitted:
             if username.lower() == 'admin' and password == 'admin123':
+                # Set URL parameters
                 st.query_params["role"] = "admin"
                 st.query_params["scope"] = "ALL"
                 st.query_params["user"] = "Admin"
+                # THE FIX: Instantly update the internal session memory
+                st.session_state.logged_in = True
+                st.session_state.role = "admin"
+                st.session_state.scope = "ALL"
+                st.session_state.username = "Admin"
                 st.rerun()
                 
             elif username.upper() in customers['ParentCompanyDistrict'].dropna().unique():
@@ -130,6 +136,11 @@ if not st.session_state.logged_in:
                     st.query_params["role"] = "district"
                     st.query_params["scope"] = username.upper()
                     st.query_params["user"] = username.upper()
+                    
+                    st.session_state.logged_in = True
+                    st.session_state.role = "district"
+                    st.session_state.scope = username.upper()
+                    st.session_state.username = username.upper()
                     st.rerun()
                 else:
                     st.error("Incorrect password for District.")
@@ -139,13 +150,17 @@ if not st.session_state.logged_in:
                     st.query_params["role"] = "parent_company"
                     st.query_params["scope"] = str(username)
                     st.query_params["user"] = f"PCID - {username}"
+                    
+                    st.session_state.logged_in = True
+                    st.session_state.role = "parent_company"
+                    st.session_state.scope = int(username)
+                    st.session_state.username = f"PCID - {username}"
                     st.rerun()
                 else:
                     st.error("Incorrect password for Parent Company.")
             else:
                 st.error("User not found.")
     st.stop()
-
 # --- 4. MAIN DASHBOARD ---
 st.sidebar.title(f"Welcome, {st.session_state.username}")
 st.sidebar.markdown(f"**Role:** {st.session_state.role.title()}")
