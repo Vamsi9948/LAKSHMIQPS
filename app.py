@@ -3,13 +3,11 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 import os
 import re
-import time
 import base64
 from datetime import datetime
 from geopy.geocoders import Nominatim
 import folium
 from streamlit_folium import st_folium
-import extra_streamlit_components as stx  # <-- NEW: The Cookie Manager
 
 # --- HIDE STREAMLIT UI ---
 st.set_page_config(page_title="Gift Selection App", page_icon="🎁", layout="wide")
@@ -30,31 +28,42 @@ hide_st_style = """
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
-# --- 1. CONNECT TO POSTGRESQL SECURELY ---
+# --- 1. CONNECT & CACHE DATABASE (FIXES NEON DATA LIMIT) ---
 DATABASE_URL = os.environ.get("DB_URL")
 
 @st.cache_resource
 def init_connection():
     if not DATABASE_URL:
-        st.error("Database URL is missing! Please add DB_URL to your Hugging Face Secrets.")
+        st.error("Database URL is missing! Please add DB_URL to your Streamlit Secrets.")
         st.stop()
     return create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
 
-try:
-    engine = init_connection()
+engine = init_connection()
+
+# This tells Streamlit to only download the data once every 10 minutes!
+@st.cache_data(ttl=600)
+def load_database_data():
     with engine.connect() as conn:
-        customers = pd.read_sql("SELECT * FROM sales_data", conn)
-        gifts = pd.read_sql("SELECT * FROM gift_slabs", conn)
-        
+        cust = pd.read_sql("SELECT * FROM sales_data", conn)
+        gfts = pd.read_sql("SELECT * FROM gift_slabs", conn)
         try:
-            costs_df = pd.read_sql("SELECT * FROM slab_costs", conn)
-            slab_to_cost = {float(row['SLAB']): float(row['COST']) for _, row in costs_df.iterrows()}
+            csts = pd.read_sql("SELECT * FROM slab_costs", conn)
         except Exception:
-            slab_to_cost = {}
+            csts = pd.DataFrame(columns=['SLAB', 'COST'])
+    return cust, gfts, csts
+
+try:
+    # We load the cached data, then create a copy so we can safely edit it
+    customers_raw, gifts_raw, costs_df = load_database_data()
+    customers = customers_raw.copy()
+    gifts = gifts_raw.copy()
+    
+    slab_to_cost = {float(row['SLAB']): float(row['COST']) for _, row in costs_df.iterrows()}
     
     gifts['SLAB'] = pd.to_numeric(gifts['SLAB'], errors='coerce')
     gifts.loc[gifts['SLAB'] == 10000000, 'SLAB'] = 1000000
     
+    # Check and add necessary delivery columns
     columns_to_add = {
         'selected_gift': "TEXT",
         'delivery_status': "TEXT DEFAULT 'Pending'",
@@ -83,29 +92,16 @@ except Exception as e:
     st.error(f"Database connection failed. Details: {e}")
     st.stop()
 
-# --- 2. SESSION STATE & COOKIE MANAGER ---
-
-cookie_manager = stx.CookieManager()
-
-# Wait a fraction of a second for cookies to load
-time.sleep(0.1) 
-
+# --- 2. URL PARAMETER LOGIN SYSTEM (FIXES REFRESH LOGOUT) ---
 if 'logged_in' not in st.session_state:
-    # Check if they have a saved cookie from a previous session
-    saved_role = cookie_manager.get(cookie="user_role")
-    
-    if saved_role:
+    # Check the web address bar to see if they already logged in
+    if "role" in st.query_params:
         st.session_state.logged_in = True
-        st.session_state.role = cookie_manager.get(cookie="user_role")
-        
-        # Scope might be a number for PCID, so we try to convert it back
-        raw_scope = cookie_manager.get(cookie="user_scope")
-        try:
-            st.session_state.scope = int(raw_scope)
-        except:
-            st.session_state.scope = raw_scope
-            
-        st.session_state.username = cookie_manager.get(cookie="username")
+        st.session_state.role = st.query_params["role"]
+        st.session_state.scope = st.query_params["scope"]
+        if st.session_state.scope.isdigit():
+            st.session_state.scope = int(st.session_state.scope)
+        st.session_state.username = st.query_params.get("user", "User")
     else:
         st.session_state.logged_in = False
         st.session_state.username = None
@@ -124,44 +120,25 @@ if not st.session_state.logged_in:
         
         if submitted:
             if username.lower() == 'admin' and password == 'admin123':
-                # Save to Session
-                st.session_state.logged_in = True
-                st.session_state.role = 'admin'
-                st.session_state.scope = 'ALL'
-                st.session_state.username = 'Admin'
-                # Save to Cookies (Expires in 30 days)
-                cookie_manager.set("user_role", "admin", key="set_role1")
-                cookie_manager.set("user_scope", "ALL", key="set_scope1")
-                cookie_manager.set("username", "Admin", key="set_name1")
-                time.sleep(0.5)
+                st.query_params["role"] = "admin"
+                st.query_params["scope"] = "ALL"
+                st.query_params["user"] = "Admin"
                 st.rerun()
                 
             elif username.upper() in customers['ParentCompanyDistrict'].dropna().unique():
                 if password == '1234':
-                    st.session_state.logged_in = True
-                    st.session_state.role = 'district'
-                    st.session_state.scope = username.upper()
-                    st.session_state.username = username.upper()
-                    
-                    cookie_manager.set("user_role", "district", key="set_role2")
-                    cookie_manager.set("user_scope", username.upper(), key="set_scope2")
-                    cookie_manager.set("username", username.upper(), key="set_name2")
-                    time.sleep(0.5)
+                    st.query_params["role"] = "district"
+                    st.query_params["scope"] = username.upper()
+                    st.query_params["user"] = username.upper()
                     st.rerun()
                 else:
                     st.error("Incorrect password for District.")
                     
             elif username.isdigit() and int(username) in customers['pcidd'].dropna().unique():
                 if password == '1234':
-                    st.session_state.logged_in = True
-                    st.session_state.role = 'parent_company'
-                    st.session_state.scope = int(username)
-                    st.session_state.username = f"PCID - {username}"
-                    
-                    cookie_manager.set("user_role", "parent_company", key="set_role3")
-                    cookie_manager.set("user_scope", str(username), key="set_scope3")
-                    cookie_manager.set("username", f"PCID - {username}", key="set_name3")
-                    time.sleep(0.5)
+                    st.query_params["role"] = "parent_company"
+                    st.query_params["scope"] = str(username)
+                    st.query_params["user"] = f"PCID - {username}"
                     st.rerun()
                 else:
                     st.error("Incorrect password for Parent Company.")
@@ -174,12 +151,9 @@ st.sidebar.title(f"Welcome, {st.session_state.username}")
 st.sidebar.markdown(f"**Role:** {st.session_state.role.title()}")
 
 if st.sidebar.button("Log Out"):
-    # Delete cookies when they log out so it actually stays logged out
-    cookie_manager.delete("user_role", key="del_role")
-    cookie_manager.delete("user_scope", key="del_scope")
-    cookie_manager.delete("username", key="del_name")
+    # Clear the URL parameters and session
+    st.query_params.clear()
     st.session_state.clear()
-    time.sleep(0.5)
     st.rerun()
 
 st.title("🎁 Gift Allocation Dashboard")
@@ -193,7 +167,7 @@ elif st.session_state.role == 'parent_company':
     base_df = customers[customers['pcidd'] == st.session_state.scope].copy()
 else:
     base_df = pd.DataFrame() # Safety fallback
-
+            
 # Dynamic Tabs based on Role
 if st.session_state.role == 'admin':
     # Admin gets the exclusive Map Tab instead of standard proof checking
