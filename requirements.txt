@@ -6,4 +6,3 @@ streamlit-geolocation
 geopy
 folium
 streamlit-folium
-extra-streamlit-components
