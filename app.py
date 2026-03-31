@@ -184,6 +184,16 @@ if st.sidebar.button("Log Out"):
 
 st.title("🎁 Gift Allocation Dashboard")
 
+# --- DEFINE BASE_DF BASED ON USER ROLE ---
+if st.session_state.role == 'admin':
+    base_df = customers.copy()
+elif st.session_state.role == 'district':
+    base_df = customers[customers['ParentCompanyDistrict'] == st.session_state.scope].copy()
+elif st.session_state.role == 'parent_company':
+    base_df = customers[customers['pcidd'] == st.session_state.scope].copy()
+else:
+    base_df = pd.DataFrame() # Safety fallback
+
 # Dynamic Tabs based on Role
 if st.session_state.role == 'admin':
     # Admin gets the exclusive Map Tab instead of standard proof checking
