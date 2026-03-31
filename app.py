@@ -84,11 +84,8 @@ except Exception as e:
     st.stop()
 
 # --- 2. SESSION STATE & COOKIE MANAGER ---
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager()
 
-cookie_manager = get_cookie_manager()
+cookie_manager = stx.CookieManager()
 
 # Wait a fraction of a second for cookies to load
 time.sleep(0.1) 
