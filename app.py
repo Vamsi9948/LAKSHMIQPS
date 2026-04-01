@@ -3,6 +3,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 import os
 import re
+import time
 import base64
 from datetime import datetime
 from geopy.geocoders import Nominatim
