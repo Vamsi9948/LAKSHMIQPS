@@ -255,6 +255,8 @@ with tab1:
                         with engine.begin() as conn:
                             query = text("UPDATE sales_data SET selected_gift = '' WHERE customermobile = :mobile")
                             conn.execute(query, {"mobile": selected_mobile})
+                        
+                        load_database_data.clear() # <--- FIX 1: Clears memory when an Admin revokes a gift
                         st.rerun()
                 else:
                     st.info("This allocation is locked. Contact an admin if you need assistance.")
@@ -296,8 +298,9 @@ with tab1:
                         st.success(f"🎉 Successfully locked in: **{final_gift_string}**!")
                         st.balloons()
                         time.sleep(1.5)
+                        
+                        load_database_data.clear() # <--- FIX 2: Clears memory when a user locks a new gift
                         st.rerun()
-
 # --------- TAB 2: CUSTOMER WISE REPORT ---------
 with tab2:
     st.subheader("📊 Customer Wise Report")
