@@ -6,3 +6,4 @@ streamlit-geolocation
 geopy
 folium
 streamlit-folium
+Pillow
