@@ -570,14 +570,37 @@ if tab5 is not None:
     with tab5:
         st.subheader("🚚 Deliver Gifts")
         
-        if st.session_state.role == 'admin':
-            districts = ["-- Select District --"] + sorted(base_df['ParentCompanyDistrict'].dropna().unique().tolist())
-            sel_dist = st.selectbox("Select District (Delivery):", districts, key="del_dist")
-            if sel_dist != "-- Select District --":
-                parents = ["-- Select Parent Company --"] + sorted(base_df[base_df['ParentCompanyDistrict'] == sel_dist]['ParentCompanyName'].dropna().unique().tolist())
+        # --- THE FIX: Filter data to ONLY show customers with locked gifts ---
+        locked_df = base_df[(base_df['selected_gift'].notna()) & (base_df['selected_gift'].str.strip() != "")].copy()
+        
+        if locked_df.empty:
+            st.success("🎉 All caught up! There are no locked gifts waiting for delivery.")
+        else:
+            if st.session_state.role == 'admin':
+                districts = ["-- Select District --"] + sorted(locked_df['ParentCompanyDistrict'].dropna().unique().tolist())
+                sel_dist = st.selectbox("Select District (Delivery):", districts, key="del_dist")
+                if sel_dist != "-- Select District --":
+                    parents = ["-- Select Parent Company --"] + sorted(locked_df[locked_df['ParentCompanyDistrict'] == sel_dist]['ParentCompanyName'].dropna().unique().tolist())
+                    sel_parent = st.selectbox("Select Parent Company:", parents, key="del_parent")
+                    if sel_parent != "-- Select Parent Company --":
+                        companies_df = locked_df[(locked_df['ParentCompanyDistrict'] == sel_dist) & (locked_df['ParentCompanyName'] == sel_parent)]
+                        comp_options = ["-- Select Company --"] + companies_df.apply(lambda row: f"{row['CompanyName']} (Mobile: {row['customermobile']})", axis=1).tolist()
+                        sel_comp = st.selectbox("Select Customer to Deliver:", comp_options, key="del_comp")
+                        if sel_comp != "-- Select Company --":
+                            mobile_match = re.search(r"Mobile: (\d+)", sel_comp)
+                            selected_del_mobile = int(mobile_match.group(1))
+                        else:
+                            selected_del_mobile = None
+                    else:
+                        selected_del_mobile = None
+                else:
+                    selected_del_mobile = None
+
+            elif st.session_state.role == 'district':
+                parents = ["-- Select Parent Company --"] + sorted(locked_df['ParentCompanyName'].dropna().unique().tolist())
                 sel_parent = st.selectbox("Select Parent Company:", parents, key="del_parent")
                 if sel_parent != "-- Select Parent Company --":
-                    companies_df = base_df[(base_df['ParentCompanyDistrict'] == sel_dist) & (base_df['ParentCompanyName'] == sel_parent)]
+                    companies_df = locked_df[locked_df['ParentCompanyName'] == sel_parent]
                     comp_options = ["-- Select Company --"] + companies_df.apply(lambda row: f"{row['CompanyName']} (Mobile: {row['customermobile']})", axis=1).tolist()
                     sel_comp = st.selectbox("Select Customer to Deliver:", comp_options, key="del_comp")
                     if sel_comp != "-- Select Company --":
@@ -587,131 +610,103 @@ if tab5 is not None:
                         selected_del_mobile = None
                 else:
                     selected_del_mobile = None
-            else:
-                selected_del_mobile = None
-
-        elif st.session_state.role == 'district':
-            parents = ["-- Select Parent Company --"] + sorted(base_df['ParentCompanyName'].dropna().unique().tolist())
-            sel_parent = st.selectbox("Select Parent Company:", parents, key="del_parent")
-            if sel_parent != "-- Select Parent Company --":
-                companies_df = base_df[base_df['ParentCompanyName'] == sel_parent]
-                comp_options = ["-- Select Company --"] + companies_df.apply(lambda row: f"{row['CompanyName']} (Mobile: {row['customermobile']})", axis=1).tolist()
+                    
+            elif st.session_state.role == 'parent_company':
+                comp_options = ["-- Select Company --"] + locked_df.apply(lambda row: f"{row['CompanyName']} (Mobile: {row['customermobile']})", axis=1).tolist()
                 sel_comp = st.selectbox("Select Customer to Deliver:", comp_options, key="del_comp")
                 if sel_comp != "-- Select Company --":
                     mobile_match = re.search(r"Mobile: (\d+)", sel_comp)
                     selected_del_mobile = int(mobile_match.group(1))
                 else:
                     selected_del_mobile = None
-            else:
-                selected_del_mobile = None
-                
-        elif st.session_state.role == 'parent_company':
-            comp_options = ["-- Select Company --"] + base_df.apply(lambda row: f"{row['CompanyName']} (Mobile: {row['customermobile']})", axis=1).tolist()
-            sel_comp = st.selectbox("Select Customer to Deliver:", comp_options, key="del_comp")
-            if sel_comp != "-- Select Company --":
-                mobile_match = re.search(r"Mobile: (\d+)", sel_comp)
-                selected_del_mobile = int(mobile_match.group(1))
-            else:
-                selected_del_mobile = None
 
-        if selected_del_mobile:
-            del_data = base_df[base_df['customermobile'] == selected_del_mobile].iloc[0]
-            allocated_gift = del_data.get('selected_gift', '')
-            delivery_status = del_data.get('delivery_status', 'Pending')
+            if selected_del_mobile:
+                del_data = base_df[base_df['customermobile'] == selected_del_mobile].iloc[0]
+                allocated_gift = del_data.get('selected_gift', '')
+                delivery_status = del_data.get('delivery_status', 'Pending')
 
-            if not allocated_gift or str(allocated_gift).strip() == "":
-                st.warning("⚠️ No gift has been allocated to this customer yet. Please allocate a gift first.")
-            elif delivery_status == 'Delivered':
-                st.success("✅ This customer's gift has already been delivered!")
-                if del_data.get('delivery_photo'):
-                    try:
-                        st.image(base64.b64decode(del_data['delivery_photo']), caption="Proof of Delivery", width=300)
-                    except:
-                        pass
-            else:
-                st.info(f"🎁 **To Deliver:** {allocated_gift}")
-                st.markdown("### 📸 Capture Delivery Proof")
-                
-                # FIX 1: Hide camera inside an expander so it doesn't auto-start!
-                with st.expander("👉 Tap here to Open Camera & GPS", expanded=False):
-                    loc = streamlit_geolocation()
-                    photo = st.camera_input("Take Photo at the Shop")
-                
-                # FIX 2: Checkbox to skip the photo requirement for testing
-                skip_photo = st.checkbox("🧪 Testing Mode: Save without taking a photo")
+                if delivery_status == 'Delivered':
+                    st.success("✅ This customer's gift has already been delivered!")
+                    if del_data.get('delivery_photo'):
+                        try:
+                            st.image(base64.b64decode(del_data['delivery_photo']), caption="Proof of Delivery", width=300)
+                        except:
+                            pass
+                else:
+                    st.info(f"🎁 **To Deliver:** {allocated_gift}")
+                    st.markdown("### 📸 Capture Delivery Proof")
+                    
+                    with st.expander("👉 Tap here to Open Camera & GPS", expanded=False):
+                        loc = streamlit_geolocation()
+                        photo = st.camera_input("Take Photo at the Shop")
+                    
+                    skip_photo = st.checkbox("🧪 Testing Mode: Save without taking a photo")
 
-                if st.button("Confirm & Save Delivery", use_container_width=True):
-                    if not loc or 'latitude' not in loc:
-                        st.error("📍 Please wait for the GPS location to load before confirming!")
-                    elif not photo and not skip_photo:
-                        st.error("📸 Please take a photo, or check the 'Testing Mode' box to skip.")
-                    else:
-                        with st.spinner("Stamping photo and saving to database..."):
-                            lat = loc['latitude']
-                            lon = loc['longitude']
-                            delivery_time = datetime.now().strftime("%Y-%m-%d %I:%M %p")
-                            
-                            # Get Street Address
-                            try:
-                                geolocator = Nominatim(user_agent="gift_app")
-                                location_data = geolocator.reverse((lat, lon), exactly_one=True)
-                                address = location_data.address if location_data else "Address not found"
-                            except:
-                                address = "Address lookup failed"
-                            
-                            # FIX 3: Stamp the GPS data directly onto the image!
-                            final_photo_b64 = ""
-                            if photo:
+                    if st.button("Confirm & Save Delivery", use_container_width=True):
+                        if not loc or 'latitude' not in loc:
+                            st.error("📍 Please wait for the GPS location to load before confirming!")
+                        elif not photo and not skip_photo:
+                            st.error("📸 Please take a photo, or check the 'Testing Mode' box to skip.")
+                        else:
+                            with st.spinner("Stamping photo and saving to database..."):
+                                lat = loc['latitude']
+                                lon = loc['longitude']
+                                delivery_time = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+                                
                                 try:
-                                    img = Image.open(photo)
-                                    draw = ImageDraw.Draw(img)
-                                    
-                                    # Try to load a standard font, fallback to default
+                                    geolocator = Nominatim(user_agent="gift_app")
+                                    location_data = geolocator.reverse((lat, lon), exactly_one=True)
+                                    address = location_data.address if location_data else "Address not found"
+                                except:
+                                    address = "Address lookup failed"
+                                
+                                final_photo_b64 = ""
+                                if photo:
                                     try:
-                                        font = ImageFont.truetype("DejaVuSans.ttf", 18)
-                                    except:
-                                        font = ImageFont.load_default()
+                                        img = Image.open(photo)
+                                        draw = ImageDraw.Draw(img)
                                         
-                                    stamp_text = f"GPS: {lat}, {lon}\nTime: {delivery_time}"
-                                    
-                                    # Draw a black rectangle at the top for the text to sit on
-                                    draw.rectangle(((0, 0), (img.width, 50)), fill="black")
-                                    # Draw the white text
-                                    draw.text((10, 5), stamp_text, fill="white", font=font)
-                                    
-                                    # Convert back to base64 for the database
-                                    buffered = io.BytesIO()
-                                    img.save(buffered, format="JPEG")
-                                    final_photo_b64 = base64.b64encode(buffered.getvalue()).decode()
-                                except Exception as e:
-                                    st.error(f"Could not stamp photo, saving original. Error: {e}")
-                                    final_photo_b64 = base64.b64encode(photo.getvalue()).decode()
+                                        try:
+                                            font = ImageFont.truetype("DejaVuSans.ttf", 18)
+                                        except:
+                                            font = ImageFont.load_default()
+                                            
+                                        stamp_text = f"GPS: {lat}, {lon}\nTime: {delivery_time}"
+                                        
+                                        draw.rectangle(((0, 0), (img.width, 50)), fill="black")
+                                        draw.text((10, 5), stamp_text, fill="white", font=font)
+                                        
+                                        buffered = io.BytesIO()
+                                        img.save(buffered, format="JPEG")
+                                        final_photo_b64 = base64.b64encode(buffered.getvalue()).decode()
+                                    except Exception as e:
+                                        st.error(f"Could not stamp photo, saving original. Error: {e}")
+                                        final_photo_b64 = base64.b64encode(photo.getvalue()).decode()
 
-                            # Save to Database
-                            with engine.begin() as conn:
-                                query = text("""
-                                    UPDATE sales_data 
-                                    SET delivery_status = 'Delivered', 
-                                        delivery_photo = :photo,
-                                        delivery_lat = :lat,
-                                        delivery_lon = :lon,
-                                        delivery_address = :addr,
-                                        delivery_time = :time
-                                    WHERE customermobile = :mobile
-                                """)
-                                conn.execute(query, {
-                                    "photo": final_photo_b64,
-                                    "lat": str(lat),
-                                    "lon": str(lon),
-                                    "addr": address,
-                                    "time": delivery_time,
-                                    "mobile": selected_del_mobile
-                                })
-                            
-                            st.success("🎉 Delivery verified and saved successfully!")
-                            time.sleep(1.5)
-                            load_database_data.clear()
-                            st.rerun()
+                                with engine.begin() as conn:
+                                    query = text("""
+                                        UPDATE sales_data 
+                                        SET delivery_status = 'Delivered', 
+                                            delivery_photo = :photo,
+                                            delivery_lat = :lat,
+                                            delivery_lon = :lon,
+                                            delivery_address = :addr,
+                                            delivery_time = :time
+                                        WHERE customermobile = :mobile
+                                    """)
+                                    conn.execute(query, {
+                                        "photo": final_photo_b64,
+                                        "lat": str(lat),
+                                        "lon": str(lon),
+                                        "addr": address,
+                                        "time": delivery_time,
+                                        "mobile": selected_del_mobile
+                                    })
+                                
+                                st.success("🎉 Delivery verified and saved successfully!")
+                                time.sleep(1.5)
+                                load_database_data.clear()
+                                st.rerun()
 # --------- TAB 6: ADMIN MAP & PROOFS ---------
 if tab6 is not None:
     with tab6:
