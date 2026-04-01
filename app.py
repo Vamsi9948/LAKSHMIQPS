@@ -9,6 +9,7 @@ from datetime import datetime
 from geopy.geocoders import Nominatim
 import folium
 from streamlit_folium import st_folium
+from streamlit_geolocation import streamlit_geolocation
 
 # --- HIDE STREAMLIT UI ---
 st.set_page_config(page_title="Gift Selection App", page_icon="🎁", layout="wide")
