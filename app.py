@@ -570,7 +570,7 @@ if tab5 is not None:
     with tab5:
         st.subheader("🚚 Deliver Gifts")
         
-        # --- THE FIX: Filter data to ONLY show customers with locked gifts ---
+        # Filter data to ONLY show customers with locked gifts
         locked_df = base_df[(base_df['selected_gift'].notna()) & (base_df['selected_gift'].str.strip() != "")].copy()
         
         if locked_df.empty:
@@ -636,29 +636,49 @@ if tab5 is not None:
                     st.info(f"🎁 **To Deliver:** {allocated_gift}")
                     st.markdown("### 📸 Capture Delivery Proof")
                     
-                    with st.expander("👉 Tap here to Open Camera & GPS", expanded=False):
+                    # --- FOOLPROOF CAMERA & GPS SECTION ---
+                    with st.expander("👉 Tap here to Open Camera & GPS", expanded=True):
+                        st.info("📍 **STEP 1:** Click the 'Get Location' button below and wait for coordinates to appear!")
                         loc = streamlit_geolocation()
+                        
+                        st.info("📸 **STEP 2:** Take the picture of the shop.")
                         photo = st.camera_input("Take Photo at the Shop")
+                        
+                        st.warning("⚠️ **EMERGENCY FALLBACK:** If the GPS button above is spinning forever or not working, type the shop address manually here:")
+                        manual_address = st.text_input("Type manual address (leave blank if GPS works):")
                     
                     skip_photo = st.checkbox("🧪 Testing Mode: Save without taking a photo")
 
                     if st.button("Confirm & Save Delivery", use_container_width=True):
-                        if not loc or 'latitude' not in loc:
-                            st.error("📍 Please wait for the GPS location to load before confirming!")
+                        # Check if we have either GPS OR a manual address
+                        has_gps = loc and 'latitude' in loc and loc['latitude'] is not None
+                        has_manual = len(manual_address.strip()) > 0
+                        
+                        if not has_gps and not has_manual:
+                            st.error("📍 Please click 'Get Location', OR type a manual address in the emergency box!")
                         elif not photo and not skip_photo:
                             st.error("📸 Please take a photo, or check the 'Testing Mode' box to skip.")
                         else:
                             with st.spinner("Stamping photo and saving to database..."):
-                                lat = loc['latitude']
-                                lon = loc['longitude']
                                 delivery_time = datetime.now().strftime("%Y-%m-%d %I:%M %p")
                                 
-                                try:
-                                    geolocator = Nominatim(user_agent="gift_app")
-                                    location_data = geolocator.reverse((lat, lon), exactly_one=True)
-                                    address = location_data.address if location_data else "Address not found"
-                                except:
-                                    address = "Address lookup failed"
+                                # Determine the final location data to save
+                                if has_gps:
+                                    lat = loc['latitude']
+                                    lon = loc['longitude']
+                                    try:
+                                        geolocator = Nominatim(user_agent="gift_app")
+                                        location_data = geolocator.reverse((lat, lon), exactly_one=True)
+                                        address = location_data.address if location_data else "Address not found"
+                                    except:
+                                        address = "Address lookup failed"
+                                    stamp_text = f"GPS: {lat}, {lon}\nTime: {delivery_time}"
+                                else:
+                                    # Fallback to manual address
+                                    lat = "Manual"
+                                    lon = "Manual"
+                                    address = manual_address
+                                    stamp_text = f"Address: {manual_address}\nTime: {delivery_time}"
                                 
                                 final_photo_b64 = ""
                                 if photo:
@@ -671,8 +691,6 @@ if tab5 is not None:
                                         except:
                                             font = ImageFont.load_default()
                                             
-                                        stamp_text = f"GPS: {lat}, {lon}\nTime: {delivery_time}"
-                                        
                                         draw.rectangle(((0, 0), (img.width, 50)), fill="black")
                                         draw.text((10, 5), stamp_text, fill="white", font=font)
                                         
