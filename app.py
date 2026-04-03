@@ -456,7 +456,82 @@ if tab3 is not None:
                         )
                     st.dataframe(df_details, use_container_width=True)
                     st.download_button(label="Download CSV", data=df_details.to_csv(index=False).encode('utf-8'), file_name=file_name_out, mime="text/csv")
-
+                    
+                    # ---------------------------------------------------------
+                    # NEW ADD-ON: PARENT COMPANY WISE BREAKDOWN FOR THE SLAB
+                    # ---------------------------------------------------------
+                    st.divider()
+                    st.write(f"### 🏢 Parent Company Breakdown for: {selected_slab_view}")
+                    st.write("This add-on groups the slab count by Parent Company and calculates the percentage of this slab's value against their Primary and Secondary Sales.")
+                    
+                    if primary_df is None or primary_df.empty:
+                        st.warning("⚠️ Primary sales data not found. Please upload your Primary Data in Tab 7 to unlock this report.")
+                    else:
+                        pc_map1, pc_map2 = st.columns(2)
+                        with pc_map1:
+                            p_dist_col = st.selectbox("Primary DB: Distributor Column", primary_df.columns.tolist(), key="addon_dist_col")
+                        with pc_map2:
+                            num_cols_p = primary_df.select_dtypes(include=['number']).columns.tolist()
+                            if not num_cols_p: num_cols_p = primary_df.columns.tolist()
+                            p_val_col = st.selectbox("Primary DB: Sales Value Column", num_cols_p, key="addon_val_col")
+                            
+                        if st.button("Generate Parent Breakdown", type="secondary"):
+                            with st.spinner("Calculating Breakdown..."):
+                                # 1. Get total slab count and slab value per Parent Company
+                                df_temp = df_details.copy()
+                                df_temp['Calculated_Slab_Value'] = df_temp['Quantity'] * df_temp['Slab Amount']
+                                
+                                parent_summary = df_temp.groupby('Parent Company').agg(
+                                    Slab_Count=('Quantity', 'sum'),
+                                    Total_Slab_Value=('Calculated_Slab_Value', 'sum')
+                                ).reset_index()
+                                
+                                # Force text to uppercase for clean matching
+                                parent_summary['Parent Company'] = parent_summary['Parent Company'].astype(str).str.upper().str.strip()
+                                
+                                # 2. Get Live Secondary Sales
+                                sec_sales_addon = base_df.groupby('ParentCompanyName')['Total'].sum().reset_index()
+                                sec_sales_addon['ParentCompanyName'] = sec_sales_addon['ParentCompanyName'].astype(str).str.upper().str.strip()
+                                sec_sales_addon.rename(columns={'ParentCompanyName': 'Parent Company', 'Total': 'Total Secondary Sales'}, inplace=True)
+                                
+                                # 3. Get Primary Sales
+                                prim_sales_addon = primary_df.groupby(p_dist_col)[p_val_col].sum().reset_index()
+                                prim_sales_addon[p_dist_col] = prim_sales_addon[p_dist_col].astype(str).str.upper().str.strip()
+                                prim_sales_addon.rename(columns={p_dist_col: 'Parent Company', p_val_col: 'Total Primary Sales'}, inplace=True)
+                                
+                                # 4. Merge Data
+                                merged_addon = pd.merge(parent_summary, sec_sales_addon, on='Parent Company', how='left').fillna(0)
+                                merged_addon = pd.merge(merged_addon, prim_sales_addon, on='Parent Company', how='left').fillna(0)
+                                
+                                # 5. Calculate Percentages (Slab Value / Total Sales * 100)
+                                merged_addon['% vs Primary Sales'] = (merged_addon['Total_Slab_Value'] / merged_addon['Total Primary Sales'] * 100)
+                                merged_addon['% vs Primary Sales'] = merged_addon['% vs Primary Sales'].replace([float('inf'), -float('inf')], 0).fillna(0)
+                                
+                                merged_addon['% vs Secondary Sales'] = (merged_addon['Total_Slab_Value'] / merged_addon['Total Secondary Sales'] * 100)
+                                merged_addon['% vs Secondary Sales'] = merged_addon['% vs Secondary Sales'].replace([float('inf'), -float('inf')], 0).fillna(0)
+                                
+                                # Cleanup columns for display
+                                merged_addon.rename(columns={'Slab_Count': 'Count'}, inplace=True)
+                                
+                                # 6. Format nicely for screen
+                                display_addon = merged_addon[['Parent Company', 'Count', 'Total Primary Sales', 'Total Secondary Sales', '% vs Primary Sales', '% vs Secondary Sales']].copy()
+                                
+                                display_addon['Total Primary Sales'] = display_addon['Total Primary Sales'].apply(lambda x: f"₹ {x:,.2f}")
+                                display_addon['Total Secondary Sales'] = display_addon['Total Secondary Sales'].apply(lambda x: f"₹ {x:,.2f}")
+                                display_addon['% vs Primary Sales'] = display_addon['% vs Primary Sales'].apply(lambda x: f"{x:,.2f}%")
+                                display_addon['% vs Secondary Sales'] = display_addon['% vs Secondary Sales'].apply(lambda x: f"{x:,.2f}%")
+                                
+                                st.dataframe(display_addon, use_container_width=True)
+                                
+                                # Pure Numeric Excel Download
+                                numeric_csv = merged_addon[['Parent Company', 'Count', 'Total Primary Sales', 'Total Secondary Sales', '% vs Primary Sales', '% vs Secondary Sales']].to_csv(index=False).encode('utf-8')
+                                st.download_button(
+                                    label="📥 Download Add-On Report (Numeric Format for Excel)", 
+                                    data=numeric_csv, 
+                                    file_name=f"Parent_Slab_Breakdown_{selected_slab_view.split(' - ')[0]}.csv", 
+                                    mime="text/csv",
+                                    type="primary"
+                                )
 # --------- TAB 4: LOCKED GIFTS BREAKDOWN ---------
 with tab4:
     st.subheader("🛍️ Locked Gifts Breakdown")
