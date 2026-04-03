@@ -865,7 +865,6 @@ if tab7 is not None:
         st.subheader("📈 Primary vs Secondary Sales Comparison")
         
         # --- 1. ADMIN DATABASE UPLOAD TOOL ---
-        # Leaving this tool here so you can easily update the file next year without needing Python!
         with st.expander("⚙️ Setup / Update Primary Database Table", expanded=primary_df.empty):
             st.info("Upload your 'july to march sale.xlsx' file here to build or update the database table.")
             uploaded_file = st.file_uploader("Upload Primary Data", type=['csv', 'xlsx'])
@@ -880,16 +879,11 @@ if tab7 is not None:
                             else:
                                 new_prim_df = pd.read_excel(uploaded_file)
                                 
-                            # Push directly to the database using the app's verified connection
                             new_prim_df.to_sql("primary_sales", engine, if_exists="replace", index=False)
-                            
                             st.success("✅ Table 'primary_sales' successfully updated in your database!")
-                            
-                            # Force the Streamlit memory to wipe itself so it sees the new data
                             st.cache_data.clear()
                             time.sleep(1.5)
                             st.rerun()
-                            
                         except Exception as e:
                             st.error(f"❌ Database error: {e}")
 
@@ -898,20 +892,22 @@ if tab7 is not None:
         # --- 2. THE COMPARISON REPORT ---
         if primary_df is None or primary_df.empty:
             st.warning("⚠️ Primary sales data not found. Please use the tool above to upload your file.")
-            
-            # Add a manual refresh button in case the cache gets stuck
             if st.button("🔄 Force Refresh Database"):
                 st.cache_data.clear()
                 st.rerun()
         else:
             st.success(f"📊 Primary Data loaded successfully! ({len(primary_df)} rows found)")
             
-            # Calculate Live Secondary Sales per Parent Company
+            # 1. Create a Mapping to pull District from the base data
+            district_map = base_df[['ParentCompanyName', 'ParentCompanyDistrict']].dropna().drop_duplicates(subset=['ParentCompanyName'])
+            district_map['ParentCompanyName'] = district_map['ParentCompanyName'].astype(str).str.upper().str.strip()
+
+            # 2. Calculate Live Secondary Sales per Parent Company
             sec_sales = base_df.groupby('ParentCompanyName')['Total'].sum().reset_index()
             sec_sales.columns = ['ParentCompanyName', 'Live_Secondary_Sales']
             
             # Dynamic Column Mapping
-            st.info("⚙️ Map the columns from your Primary Database to generate the report:")
+            st.info("⚙️ Map the columns from your Primary Database to configure the report:")
             col_map1, col_map2 = st.columns(2)
             
             with col_map1:
@@ -922,31 +918,78 @@ if tab7 is not None:
                     numeric_cols = primary_df.columns.tolist()
                 val_col = st.selectbox("Which column represents the Primary Sales Value?", numeric_cols)
                 
-            if st.button("Generate Comparison Report", type="primary"):
-                with st.spinner("Calculating variances..."):
-                    # Group the primary data
-                    prim_sales = primary_df.groupby(dist_col)[val_col].sum().reset_index()
-                    
-                    # Force both columns to be uppercase strings so the names match perfectly
-                    prim_sales[dist_col] = prim_sales[dist_col].astype(str).str.upper().str.strip()
-                    sec_sales['ParentCompanyName'] = sec_sales['ParentCompanyName'].astype(str).str.upper().str.strip()
-                    prim_sales.columns = ['ParentCompanyName', 'Static_Primary_Sales']
-                    
-                    # Merge the two datasets together
-                    comparison_df = pd.merge(prim_sales, sec_sales, on='ParentCompanyName', how='outer').fillna(0)
-                    
-                    # Calculate the Variance (Secondary - Primary)
-                    comparison_df['Variance (Excess/Deficit)'] = comparison_df['Live_Secondary_Sales'] - comparison_df['Static_Primary_Sales']
-                    
-                    # Format as currency for display
-                    display_df = comparison_df.copy()
-                    for col in ['Static_Primary_Sales', 'Live_Secondary_Sales', 'Variance (Excess/Deficit)']:
-                        display_df[col] = display_df[col].apply(lambda x: f"₹ {x:,.2f}")
-                    
-                    st.success("Report Generated Successfully!")
-                    st.dataframe(display_df, use_container_width=True)
-                    
-                    # Visual Chart
-                    st.markdown("### Top 10 Distributors (Live Secondary Volume)")
-                    chart_data = comparison_df.sort_values('Live_Secondary_Sales', ascending=False).head(10)
-                    st.bar_chart(data=chart_data.set_index('ParentCompanyName')[['Static_Primary_Sales', 'Live_Secondary_Sales']])
+            # --- AUTO-GENERATE DATA ---
+            # Group the primary data
+            prim_sales = primary_df.groupby(dist_col)[val_col].sum().reset_index()
+            
+            # Force both columns to be uppercase strings so the names match perfectly
+            prim_sales[dist_col] = prim_sales[dist_col].astype(str).str.upper().str.strip()
+            sec_sales['ParentCompanyName'] = sec_sales['ParentCompanyName'].astype(str).str.upper().str.strip()
+            prim_sales.columns = ['ParentCompanyName', 'Static_Primary_Sales']
+            
+            # Merge the Primary and Secondary datasets
+            comparison_df = pd.merge(prim_sales, sec_sales, on='ParentCompanyName', how='outer').fillna(0)
+            
+            # Merge in the District Names
+            comparison_df = pd.merge(comparison_df, district_map, on='ParentCompanyName', how='left')
+            comparison_df['ParentCompanyDistrict'] = comparison_df['ParentCompanyDistrict'].fillna("Unknown")
+            
+            # Calculate Variance (Secondary - Primary)
+            comparison_df['Variance (Excess/Deficit)'] = comparison_df['Live_Secondary_Sales'] - comparison_df['Static_Primary_Sales']
+            
+            # Reorder columns and rename
+            comparison_df = comparison_df[['ParentCompanyDistrict', 'ParentCompanyName', 'Static_Primary_Sales', 'Live_Secondary_Sales', 'Variance (Excess/Deficit)']]
+            comparison_df.rename(columns={'ParentCompanyDistrict': 'District'}, inplace=True)
+
+            st.divider()
+
+            # --- 3. FILTERING & DYNAMIC TOTALS ---
+            all_districts = sorted(comparison_df['District'].unique().tolist())
+            selected_dist = st.selectbox("🔍 Filter Report by District:", ["All Districts"] + all_districts)
+
+            # Apply Filter
+            if selected_dist != "All Districts":
+                display_df = comparison_df[comparison_df['District'] == selected_dist].copy()
+            else:
+                display_df = comparison_df.copy()
+
+            # Calculate Dynamic Grand Totals based on filtered data
+            total_prim = display_df['Static_Primary_Sales'].sum()
+            total_sec = display_df['Live_Secondary_Sales'].sum()
+            total_var = display_df['Variance (Excess/Deficit)'].sum()
+
+            st.markdown(f"### 📈 Grand Totals for: **{selected_dist}**")
+            met1, met2, met3 = st.columns(3)
+            met1.metric("Grand Total Primary Sales", f"₹ {total_prim:,.2f}")
+            met2.metric("Grand Total Secondary Sales", f"₹ {total_sec:,.2f}")
+            met3.metric("Grand Total Variance", f"₹ {total_var:,.2f}")
+            
+            st.write("") # Spacer
+
+            # Display Dataframe (Looks nice on screen, but stays pure numbers in the background!)
+            st.dataframe(
+                display_df, 
+                use_container_width=True,
+                column_config={
+                    "District": st.column_config.TextColumn("District"),
+                    "ParentCompanyName": st.column_config.TextColumn("Distributor"),
+                    "Static_Primary_Sales": st.column_config.NumberColumn("Primary Sales", format="₹ %.2f"),
+                    "Live_Secondary_Sales": st.column_config.NumberColumn("Secondary Sales", format="₹ %.2f"),
+                    "Variance (Excess/Deficit)": st.column_config.NumberColumn("Variance", format="₹ %.2f")
+                }
+            )
+            
+            # --- 4. EXCEL-READY DOWNLOAD BUTTON ---
+            csv_export = display_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Data as CSV (Numeric Format for Excel)", 
+                data=csv_export, 
+                file_name=f"Primary_vs_Secondary_{selected_dist.replace(' ', '_')}.csv", 
+                mime="text/csv",
+                type="primary"
+            )
+            
+            # Visual Chart
+            st.markdown(f"### Top 10 Distributors ({selected_dist})")
+            chart_data = display_df.sort_values('Live_Secondary_Sales', ascending=False).head(10)
+            st.bar_chart(data=chart_data.set_index('ParentCompanyName')[['Static_Primary_Sales', 'Live_Secondary_Sales']])
