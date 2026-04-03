@@ -54,13 +54,21 @@ def load_database_data():
             csts = pd.read_sql("SELECT * FROM slab_costs", conn)
         except Exception:
             csts = pd.DataFrame(columns=['SLAB', 'COST'])
-    return cust, gfts, csts
+            
+        # --- NEW: Load Primary Sales Data ---
+        try:
+            prim = pd.read_sql("SELECT * FROM primary_sales", conn)
+        except Exception:
+            prim = pd.DataFrame() # Fallback if table doesn't exist yet
+            
+    return cust, gfts, csts, prim
 
 try:
     # We load the cached data, then create a copy so we can safely edit it
-    customers_raw, gifts_raw, costs_df = load_database_data()
+    customers_raw, gifts_raw, costs_df, primary_raw = load_database_data()
     customers = customers_raw.copy()
     gifts = gifts_raw.copy()
+    primary_df = primary_raw.copy() # Our new Primary Data!
     
     slab_to_cost = {float(row['SLAB']): float(row['COST']) for _, row in costs_df.iterrows()}
     
@@ -165,6 +173,7 @@ if not st.session_state.logged_in:
             else:
                 st.error("User not found.")
     st.stop()
+    
 # --- 4. MAIN DASHBOARD ---
 st.sidebar.title(f"Welcome, {st.session_state.username}")
 st.sidebar.markdown(f"**Role:** {st.session_state.role.title()}")
@@ -189,18 +198,20 @@ else:
             
 # Dynamic Tabs based on Role
 if st.session_state.role == 'admin':
-    # Admin gets the exclusive Map Tab instead of standard proof checking
-    tabs = st.tabs(["🎁 Allocate Gifts", "📊 Customer Wise Report", "📦 Projected Breakdown", "🛍️ Locked Gifts Breakdown", "🚚 Deliver Gifts", "🗺️ Admin Map & Proofs"])
-    tab1, tab2, tab3, tab4, tab5, tab6 = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5]
+    # Admin gets the exclusive Map Tab AND the new Primary vs Secondary Tab
+    tabs = st.tabs(["🎁 Allocate Gifts", "📊 Customer Wise Report", "📦 Projected Breakdown", "🛍️ Locked Gifts Breakdown", "🚚 Deliver Gifts", "🗺️ Admin Map & Proofs", "📈 Primary vs Secondary"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6]
 elif st.session_state.role == 'district':
     tabs = st.tabs(["🎁 Allocate Gifts", "📊 Customer Wise Report", "📦 Projected Breakdown", "🛍️ Locked Gifts Breakdown", "🚚 Deliver Gifts"])
     tab1, tab2, tab3, tab4, tab5 = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4]
     tab6 = None
+    tab7 = None
 else:
     tabs = st.tabs(["🎁 Allocate Gifts", "📊 Customer Wise Report", "🛍️ Locked Gifts Breakdown", "🚚 Deliver Gifts"])
     tab1, tab2, tab4, tab5 = tabs[0], tabs[1], tabs[2], tabs[3]
     tab3 = None
     tab6 = None
+    tab7 = None
 
 # --------- TAB 1: ALLOCATE GIFTS ---------
 with tab1:
@@ -304,6 +315,7 @@ with tab1:
                         
                         load_database_data.clear() # <--- FIX 2: Clears memory when a user locks a new gift
                         st.rerun()
+
 # --------- TAB 2: CUSTOMER WISE REPORT ---------
 with tab2:
     st.subheader("📊 Customer Wise Report")
@@ -725,6 +737,7 @@ if tab5 is not None:
                                 time.sleep(1.5)
                                 load_database_data.clear()
                                 st.rerun()
+
 # --------- TAB 6: ADMIN MAP & PROOFS ---------
 if tab6 is not None:
     with tab6:
@@ -844,3 +857,96 @@ if tab6 is not None:
             st.success("All locked gifts for this Parent Company have been delivered!")
         else:
             st.dataframe(pending_map_df[['ParentCompanyName', 'CompanyName', 'customermobile', 'selected_gift']], use_container_width=True)
+
+
+# --------- TAB 7: PRIMARY VS SECONDARY (ADMIN ONLY) ---------
+if tab7 is not None:
+    with tab7:
+        st.subheader("📈 Primary vs Secondary Sales Comparison")
+        
+        # --- 1. ADMIN DATABASE UPLOAD TOOL ---
+        # Leaving this tool here so you can easily update the file next year without needing Python!
+        with st.expander("⚙️ Setup / Update Primary Database Table", expanded=primary_df.empty):
+            st.info("Upload your 'july to march sale.xlsx' file here to build or update the database table.")
+            uploaded_file = st.file_uploader("Upload Primary Data", type=['csv', 'xlsx'])
+            
+            if uploaded_file is not None:
+                if st.button("Save to SQL Database & Clear Cache", type="primary"):
+                    with st.spinner("Building table in Neon SQL..."):
+                        try:
+                            # Read file based on extension
+                            if uploaded_file.name.endswith('.csv'):
+                                new_prim_df = pd.read_csv(uploaded_file)
+                            else:
+                                new_prim_df = pd.read_excel(uploaded_file)
+                                
+                            # Push directly to the database using the app's verified connection
+                            new_prim_df.to_sql("primary_sales", engine, if_exists="replace", index=False)
+                            
+                            st.success("✅ Table 'primary_sales' successfully updated in your database!")
+                            
+                            # Force the Streamlit memory to wipe itself so it sees the new data
+                            st.cache_data.clear()
+                            time.sleep(1.5)
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"❌ Database error: {e}")
+
+        st.divider()
+
+        # --- 2. THE COMPARISON REPORT ---
+        if primary_df is None or primary_df.empty:
+            st.warning("⚠️ Primary sales data not found. Please use the tool above to upload your file.")
+            
+            # Add a manual refresh button in case the cache gets stuck
+            if st.button("🔄 Force Refresh Database"):
+                st.cache_data.clear()
+                st.rerun()
+        else:
+            st.success(f"📊 Primary Data loaded successfully! ({len(primary_df)} rows found)")
+            
+            # Calculate Live Secondary Sales per Parent Company
+            sec_sales = base_df.groupby('ParentCompanyName')['Total'].sum().reset_index()
+            sec_sales.columns = ['ParentCompanyName', 'Live_Secondary_Sales']
+            
+            # Dynamic Column Mapping
+            st.info("⚙️ Map the columns from your Primary Database to generate the report:")
+            col_map1, col_map2 = st.columns(2)
+            
+            with col_map1:
+                dist_col = st.selectbox("Which column represents the Distributor?", primary_df.columns.tolist())
+            with col_map2:
+                numeric_cols = primary_df.select_dtypes(include=['number']).columns.tolist()
+                if not numeric_cols:
+                    numeric_cols = primary_df.columns.tolist()
+                val_col = st.selectbox("Which column represents the Primary Sales Value?", numeric_cols)
+                
+            if st.button("Generate Comparison Report", type="primary"):
+                with st.spinner("Calculating variances..."):
+                    # Group the primary data
+                    prim_sales = primary_df.groupby(dist_col)[val_col].sum().reset_index()
+                    
+                    # Force both columns to be uppercase strings so the names match perfectly
+                    prim_sales[dist_col] = prim_sales[dist_col].astype(str).str.upper().str.strip()
+                    sec_sales['ParentCompanyName'] = sec_sales['ParentCompanyName'].astype(str).str.upper().str.strip()
+                    prim_sales.columns = ['ParentCompanyName', 'Static_Primary_Sales']
+                    
+                    # Merge the two datasets together
+                    comparison_df = pd.merge(prim_sales, sec_sales, on='ParentCompanyName', how='outer').fillna(0)
+                    
+                    # Calculate the Variance (Secondary - Primary)
+                    comparison_df['Variance (Excess/Deficit)'] = comparison_df['Live_Secondary_Sales'] - comparison_df['Static_Primary_Sales']
+                    
+                    # Format as currency for display
+                    display_df = comparison_df.copy()
+                    for col in ['Static_Primary_Sales', 'Live_Secondary_Sales', 'Variance (Excess/Deficit)']:
+                        display_df[col] = display_df[col].apply(lambda x: f"₹ {x:,.2f}")
+                    
+                    st.success("Report Generated Successfully!")
+                    st.dataframe(display_df, use_container_width=True)
+                    
+                    # Visual Chart
+                    st.markdown("### Top 10 Distributors (Live Secondary Volume)")
+                    chart_data = comparison_df.sort_values('Live_Secondary_Sales', ascending=False).head(10)
+                    st.bar_chart(data=chart_data.set_index('ParentCompanyName')[['Static_Primary_Sales', 'Live_Secondary_Sales']])
