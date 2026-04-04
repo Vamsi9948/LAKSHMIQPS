@@ -40,7 +40,22 @@ def init_connection():
     if not DATABASE_URL:
         st.error("Database URL is missing! Please add DB_URL to your Streamlit Secrets.")
         st.stop()
-    return create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
+        
+    clean_url = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://")
+    
+    return create_engine(
+        clean_url, 
+        pool_pre_ping=True, 
+        pool_recycle=300,
+        pool_size=5,
+        max_overflow=10,
+        connect_args={
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5
+        }
+    )
 
 engine = init_connection()
 
@@ -55,27 +70,25 @@ def load_database_data():
         except Exception:
             csts = pd.DataFrame(columns=['SLAB', 'COST'])
             
-        # --- NEW: Load Primary Sales Data ---
         try:
             prim = pd.read_sql("SELECT * FROM primary_sales", conn)
         except Exception:
-            prim = pd.DataFrame() # Fallback if table doesn't exist yet
+            prim = pd.DataFrame() 
             
     return cust, gfts, csts, prim
 
 try:
-    # We load the cached data, then create a copy so we can safely edit it
     customers_raw, gifts_raw, costs_df, primary_raw = load_database_data()
     customers = customers_raw.copy()
     gifts = gifts_raw.copy()
-    primary_df = primary_raw.copy() # Our new Primary Data!
+    primary_df = primary_raw.copy() 
     
     slab_to_cost = {float(row['SLAB']): float(row['COST']) for _, row in costs_df.iterrows()}
     
     gifts['SLAB'] = pd.to_numeric(gifts['SLAB'], errors='coerce')
     gifts.loc[gifts['SLAB'] == 10000000, 'SLAB'] = 1000000
     
-    # Check and add necessary delivery columns
+    # --- BULLETPROOF COLUMN CREATION ---
     columns_to_add = {
         'selected_gift': "TEXT",
         'delivery_status': "TEXT DEFAULT 'Pending'",
@@ -83,20 +96,33 @@ try:
         'delivery_lat': "TEXT",
         'delivery_lon': "TEXT",
         'delivery_address': "TEXT",
-        'delivery_time': "TEXT"
+        'delivery_time': "TEXT",
+        'is_blocked': "TEXT DEFAULT 'No'"
     }
     
+    # Force add columns if they don't exist in the database yet
+    for col, col_type in columns_to_add.items():
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE sales_data ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            pass # Ignore if there's a minor sync error, column already exists
+            
+    # Apply defaults to the dataframe memory
     for col, col_type in columns_to_add.items():
         if col not in customers.columns:
-            with engine.begin() as conn:
-                conn.execute(text(f"ALTER TABLE sales_data ADD COLUMN {col} {col_type}"))
             if 'DEFAULT' in col_type:
-                customers[col] = "Pending"
+                if 'Pending' in col_type:
+                    customers[col] = "Pending"
+                elif 'No' in col_type:
+                    customers[col] = "No"
             else:
                 customers[col] = ""
         else:
             if col == 'delivery_status':
                 customers[col] = customers[col].fillna("Pending")
+            elif col == 'is_blocked':
+                customers[col] = customers[col].fillna("No")
             else:
                 customers[col] = customers[col].fillna("")
         
@@ -104,9 +130,8 @@ except Exception as e:
     st.error(f"Database connection failed. Details: {e}")
     st.stop()
 
-# --- 2. URL PARAMETER LOGIN SYSTEM (FIXES REFRESH LOGOUT) ---
+# --- 2. URL PARAMETER LOGIN SYSTEM ---
 if 'logged_in' not in st.session_state:
-    # Check the web address bar to see if they already logged in
     if "role" in st.query_params:
         st.session_state.logged_in = True
         st.session_state.role = st.query_params["role"]
@@ -132,11 +157,9 @@ if not st.session_state.logged_in:
         
         if submitted:
             if username.lower() == 'admin' and password == 'admin123':
-                # Set URL parameters
                 st.query_params["role"] = "admin"
                 st.query_params["scope"] = "ALL"
                 st.query_params["user"] = "Admin"
-                # THE FIX: Instantly update the internal session memory
                 st.session_state.logged_in = True
                 st.session_state.role = "admin"
                 st.session_state.scope = "ALL"
@@ -148,7 +171,6 @@ if not st.session_state.logged_in:
                     st.query_params["role"] = "district"
                     st.query_params["scope"] = username.upper()
                     st.query_params["user"] = username.upper()
-                    
                     st.session_state.logged_in = True
                     st.session_state.role = "district"
                     st.session_state.scope = username.upper()
@@ -162,7 +184,6 @@ if not st.session_state.logged_in:
                     st.query_params["role"] = "parent_company"
                     st.query_params["scope"] = str(username)
                     st.query_params["user"] = f"PCID - {username}"
-                    
                     st.session_state.logged_in = True
                     st.session_state.role = "parent_company"
                     st.session_state.scope = int(username)
@@ -179,7 +200,6 @@ st.sidebar.title(f"Welcome, {st.session_state.username}")
 st.sidebar.markdown(f"**Role:** {st.session_state.role.title()}")
 
 if st.sidebar.button("Log Out"):
-    # Clear the URL parameters and session
     st.query_params.clear()
     st.session_state.clear()
     st.rerun()
@@ -194,11 +214,10 @@ elif st.session_state.role == 'district':
 elif st.session_state.role == 'parent_company':
     base_df = customers[customers['pcidd'] == st.session_state.scope].copy()
 else:
-    base_df = pd.DataFrame() # Safety fallback
+    base_df = pd.DataFrame() 
             
 # Dynamic Tabs based on Role
 if st.session_state.role == 'admin':
-    # Admin gets the exclusive Map Tab AND the new Primary vs Secondary Tab
     tabs = st.tabs(["🎁 Allocate Gifts", "📊 Customer Wise Report", "📦 Projected Breakdown", "🛍️ Locked Gifts Breakdown", "🚚 Deliver Gifts", "🗺️ Admin Map & Proofs", "📈 Primary vs Secondary"])
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6]
 elif st.session_state.role == 'district':
@@ -255,72 +274,91 @@ with tab1:
         customer_points = customer_data['Total']
         current_allocation = customer_data['selected_gift']
         delivery_status = customer_data.get('delivery_status', 'Pending')
+        is_blocked = customer_data.get('is_blocked', 'No')
         
         st.info(f"🪙 **Available Points:** {customer_points} | **Credit Limit:** {customer_data['CreditLimit']}")
 
-        if current_allocation and str(current_allocation).strip() != "":
-            st.success(f"🔒 **Gift Locked:** {current_allocation}")
-            
-            if delivery_status == 'Delivered':
-                st.success("✅ **STATUS: DELIVERED** - This gift has already been handed over to the customer.")
+        if st.session_state.role == 'admin':
+            if is_blocked == 'Yes':
+                st.error("🚫 **This customer is currently BLOCKED.** They are hidden from projected reports and cannot be allocated gifts.")
+                if st.button("🔓 Unblock Customer", type="primary"):
+                    with engine.begin() as conn:
+                        conn.execute(text("UPDATE sales_data SET is_blocked = 'No' WHERE CAST(customermobile AS TEXT) = :mobile"), {"mobile": str(selected_mobile)})
+                    load_database_data.clear()
+                    st.rerun()
             else:
-                if st.session_state.role == 'admin':
-                    if st.button("Revoke / Change Allocation (Admin Only)"):
-                        with engine.begin() as conn:
-                            query = text("UPDATE sales_data SET selected_gift = '' WHERE customermobile = :mobile")
-                            conn.execute(query, {"mobile": selected_mobile})
-                        
-                        load_database_data.clear() # <--- FIX 1: Clears memory when an Admin revokes a gift
-                        st.rerun()
-                else:
-                    st.info("This allocation is locked. Contact an admin if you need assistance.")
+                if st.button("🚫 Block Customer"):
+                    with engine.begin() as conn:
+                        conn.execute(text("UPDATE sales_data SET is_blocked = 'Yes', selected_gift = '', delivery_status = 'Pending' WHERE CAST(customermobile AS TEXT) = :mobile"), {"mobile": str(selected_mobile)})
+                    load_database_data.clear()
+                    st.rerun()
+
+        if is_blocked == 'Yes':
+            st.warning("⚠️ Gift allocation is disabled while the customer is blocked. Unblock them above to restore access.")
         else:
-            st.subheader("2️⃣ Allocate Gifts")
-            total_spent = 0
-            selections = {}
-            gifts_sorted = gifts.sort_values(by="SLAB", ascending=True)
-
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                for index, row in gifts_sorted.iterrows():
-                    gift_name = row['ITEM NAME ']
-                    gift_points = int(row['SLAB'])
-                    
-                    if gift_points <= customer_points:
-                        max_qty = int(customer_points // gift_points)
-                        row_col1, row_col2 = st.columns([3, 1])
-                        row_col1.markdown(f"**{gift_name}** \n*(Cost: {gift_points} pts)*")
-                        qty = row_col2.number_input(f"Qty##{gift_name}", min_value=0, max_value=max_qty, value=0, label_visibility="collapsed")
-                        if qty > 0:
-                            selections[gift_name] = {'qty': qty, 'points': gift_points}
-                            total_spent += (qty * gift_points)
-
-            with col2:
-                st.markdown("### Cart Summary")
-                points_remaining = customer_points - total_spent
-                if total_spent > customer_points:
-                    st.error(f"❌ Over limit by {total_spent - customer_points} pts!")
+            if current_allocation and str(current_allocation).strip() != "":
+                st.success(f"🔒 **Gift Locked:** {current_allocation}")
+                
+                if delivery_status == 'Delivered':
+                    st.success("✅ **STATUS: DELIVERED** - This gift has already been handed over to the customer.")
                 else:
-                    st.metric(label="Total Points Spent", value=total_spent)
-                    st.metric(label="Points Remaining", value=points_remaining)
-                    if total_spent > 0 and st.button("Lock in Gift Selection", use_container_width=True):
-                        chosen_items = [f"{g} (x{d['qty']})" for g, d in selections.items() if d['qty'] > 0]
-                        final_gift_string = ", ".join(chosen_items)
-                        with engine.begin() as conn:
-                            query = text("UPDATE sales_data SET selected_gift = :gift, delivery_status = 'Pending' WHERE customermobile = :mobile")
-                            conn.execute(query, {"gift": final_gift_string, "mobile": selected_mobile})
-                        st.success(f"🎉 Successfully locked in: **{final_gift_string}**!")
-                        st.balloons()
-                        time.sleep(1.5)
+                    if st.session_state.role == 'admin':
+                        if st.button("Revoke / Change Allocation (Admin Only)"):
+                            with engine.begin() as conn:
+                                query = text("UPDATE sales_data SET selected_gift = '' WHERE CAST(customermobile AS TEXT) = :mobile")
+                                conn.execute(query, {"mobile": str(selected_mobile)})
+                            
+                            load_database_data.clear() 
+                            st.rerun()
+                    else:
+                        st.info("This allocation is locked. Contact an admin if you need assistance.")
+            else:
+                st.subheader("2️⃣ Allocate Gifts")
+                total_spent = 0
+                selections = {}
+                gifts_sorted = gifts.sort_values(by="SLAB", ascending=True)
+
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    for index, row in gifts_sorted.iterrows():
+                        gift_name = row['ITEM NAME ']
+                        gift_points = int(row['SLAB'])
                         
-                        load_database_data.clear() # <--- FIX 2: Clears memory when a user locks a new gift
-                        st.rerun()
+                        if gift_points <= customer_points:
+                            max_qty = int(customer_points // gift_points)
+                            row_col1, row_col2 = st.columns([3, 1])
+                            row_col1.markdown(f"**{gift_name}** \n*(Cost: {gift_points} pts)*")
+                            qty = row_col2.number_input(f"Qty##{gift_name}", min_value=0, max_value=max_qty, value=0, label_visibility="collapsed")
+                            if qty > 0:
+                                selections[gift_name] = {'qty': qty, 'points': gift_points}
+                                total_spent += (qty * gift_points)
+
+                with col2:
+                    st.markdown("### Cart Summary")
+                    points_remaining = customer_points - total_spent
+                    if total_spent > customer_points:
+                        st.error(f"❌ Over limit by {total_spent - customer_points} pts!")
+                    else:
+                        st.metric(label="Total Points Spent", value=total_spent)
+                        st.metric(label="Points Remaining", value=points_remaining)
+                        if total_spent > 0 and st.button("Lock in Gift Selection", use_container_width=True):
+                            chosen_items = [f"{g} (x{d['qty']})" for g, d in selections.items() if d['qty'] > 0]
+                            final_gift_string = ", ".join(chosen_items)
+                            with engine.begin() as conn:
+                                query = text("UPDATE sales_data SET selected_gift = :gift, delivery_status = 'Pending' WHERE CAST(customermobile AS TEXT) = :mobile")
+                                conn.execute(query, {"gift": final_gift_string, "mobile": str(selected_mobile)})
+                            st.success(f"🎉 Successfully locked in: **{final_gift_string}**!")
+                            st.balloons()
+                            time.sleep(1.5)
+                            
+                            load_database_data.clear() 
+                            st.rerun()
 
 # --------- TAB 2: CUSTOMER WISE REPORT ---------
 with tab2:
     st.subheader("📊 Customer Wise Report")
     report_df = base_df.copy()
-    display_cols = ['ParentCompanyDistrict', 'ParentCompanyName', 'CompanyName', 'customermobile', 'Total', 'selected_gift', 'delivery_status', 'delivery_time']
+    display_cols = ['ParentCompanyDistrict', 'ParentCompanyName', 'CompanyName', 'customermobile', 'Total', 'selected_gift', 'delivery_status', 'delivery_time', 'is_blocked']
     
     if st.session_state.role == 'admin':
         col1, col2 = st.columns(2)
@@ -352,7 +390,7 @@ if tab3 is not None:
     with tab3:
         st.subheader("📦 Projected Slab Breakdown")
         
-       # --- SAFE FILTER OUT BLOCKED CUSTOMERS ---
+        # --- SAFE FILTER OUT BLOCKED CUSTOMERS ---
         if 'is_blocked' in base_df.columns:
             report_df_slab = base_df[base_df['is_blocked'] != 'Yes'].copy()
         else:
@@ -416,7 +454,6 @@ if tab3 is not None:
                     pct_of_grand = (total_spend / grand_total_spend * 100) if grand_total_spend > 0 else 0
                     reward_pct = (total_spend / total_slab_value * 100) if total_slab_value > 0 else 0
                     
-                    # Store raw numbers first for Grand Total math later
                     row_data["Total Slab Value"] = total_slab_value
                     row_data["Unit Cost (₹)"] = unit_cost
                     row_data["Total Spend (₹)"] = total_spend
@@ -426,7 +463,6 @@ if tab3 is not None:
 
             sum_df = pd.DataFrame(summary_data)
             
-            # --- GRAND TOTAL ROW INJECTED ---
             if st.session_state.role == 'admin' and not sum_df.empty:
                 grand_slab_value = sum_df["Total Slab Value"].sum()
                 grand_reward_pct = (grand_total_spend / grand_slab_value * 100) if grand_slab_value > 0 else 0
@@ -442,7 +478,6 @@ if tab3 is not None:
                     "% of Grand Total": "100.00%"
                 }
                 
-                # Format the numeric columns into beautiful text
                 sum_df["Total Slab Value"] = sum_df["Total Slab Value"].apply(lambda x: f"{x:,.0f}")
                 sum_df["Unit Cost (₹)"] = sum_df["Unit Cost (₹)"].apply(lambda x: f"{x:,.2f}")
                 sum_df["Total Spend (₹)"] = sum_df["Total Spend (₹)"].apply(lambda x: f"{x:,.2f}")
@@ -492,15 +527,11 @@ if tab3 is not None:
                     st.dataframe(df_details, use_container_width=True)
                     st.download_button(label="Download CSV", data=df_details.to_csv(index=False).encode('utf-8'), file_name=file_name_out, mime="text/csv")
                     
-                    # ---------------------------------------------------------
-                    # NEW: QUICK BLOCK / UNBLOCK DIRECTLY FROM THIS TAB
-                    # ---------------------------------------------------------
                     if st.session_state.role == 'admin':
                         st.write("")
                         with st.expander("🚫 Quick Block / Unblock Customer Status", expanded=False):
                             st.write("Search for any customer (Active or Blocked) in this district to manage their status.")
                             
-                            # Use base_df to include blocked customers in the search dropdown
                             manage_df = base_df.copy()
                             if dist_filter_slab != "All Districts":
                                 manage_df = manage_df[manage_df['ParentCompanyDistrict'] == dist_filter_slab]
@@ -529,20 +560,16 @@ if tab3 is not None:
                                         if is_currently_blocked == 'Yes':
                                             if st.button("🔓 Unblock", use_container_width=True, type="primary"):
                                                 with engine.begin() as conn:
-                                                    conn.execute(text("UPDATE sales_data SET is_blocked = 'No' WHERE customermobile = :mobile"), {"mobile": target_mobile})
+                                                    conn.execute(text("UPDATE sales_data SET is_blocked = 'No' WHERE CAST(customermobile AS TEXT) = :mobile"), {"mobile": str(target_mobile)})
                                                 load_database_data.clear()
                                                 st.rerun()
                                         else:
                                             if st.button("🚫 Block", use_container_width=True):
                                                 with engine.begin() as conn:
-                                                    # Blocking also revokes any locked gifts automatically
-                                                    conn.execute(text("UPDATE sales_data SET is_blocked = 'Yes', selected_gift = '', delivery_status = 'Pending' WHERE customermobile = :mobile"), {"mobile": target_mobile})
+                                                    conn.execute(text("UPDATE sales_data SET is_blocked = 'Yes', selected_gift = '', delivery_status = 'Pending' WHERE CAST(customermobile AS TEXT) = :mobile"), {"mobile": str(target_mobile)})
                                                 load_database_data.clear()
                                                 st.rerun()
 
-                    # ---------------------------------------------------------
-                    # PARENT COMPANY WISE BREAKDOWN FOR THE SLAB
-                    # ---------------------------------------------------------
                     st.divider()
                     st.write(f"### 🏢 Parent Company Breakdown for: {selected_slab_view}")
                     st.write("This report analyzes how the awarded gifts compare against the Parent Company's total created customers, Primary Sales, and Secondary Sales.")
@@ -563,7 +590,6 @@ if tab3 is not None:
                                 df_temp = df_details.copy()
                                 df_temp['Calculated_Slab_Value'] = df_temp['Quantity'] * df_temp['Slab Amount']
                                 
-                                # 1. Group by District and Parent Company (Slab stats)
                                 parent_summary = df_temp.groupby(['District', 'Parent Company']).agg(
                                     Slab_Count=('Quantity', 'sum'),
                                     Total_Slab_Value=('Calculated_Slab_Value', 'sum')
@@ -571,7 +597,6 @@ if tab3 is not None:
                                 
                                 parent_summary['Parent Company'] = parent_summary['Parent Company'].astype(str).str.upper().str.strip()
                                 
-                                # 2. Get Live Secondary Sales & TOTAL CREATED COMPANIES (Base Data)
                                 sec_sales_addon = base_df.groupby('ParentCompanyName').agg(
                                     Total_Secondary_Sales=('Total', 'sum'),
                                     Total_Created_Companies=('customermobile', 'nunique')
@@ -583,33 +608,25 @@ if tab3 is not None:
                                     'Total_Created_Companies': 'Total Created Companies'
                                 }, inplace=True)
                                 
-                                # 3. Get Primary Sales
                                 prim_sales_addon = primary_df.groupby(p_dist_col)[p_val_col].sum().reset_index()
                                 prim_sales_addon[p_dist_col] = prim_sales_addon[p_dist_col].astype(str).str.upper().str.strip()
                                 prim_sales_addon.rename(columns={p_dist_col: 'Parent Company', p_val_col: 'Total Primary Sales'}, inplace=True)
                                 
-                                # 4. Merge Data
                                 merged_addon = pd.merge(parent_summary, sec_sales_addon, on='Parent Company', how='left').fillna(0)
                                 merged_addon = pd.merge(merged_addon, prim_sales_addon, on='Parent Company', how='left').fillna(0)
                                 
-                                # 5. Calculate Percentages
                                 total_slab_gifts_for_view = parent_summary['Slab_Count'].sum()
                                 
                                 merged_addon['% of Total Slab Count'] = (merged_addon['Slab_Count'] / total_slab_gifts_for_view * 100)
                                 merged_addon['% vs Primary Sales'] = (merged_addon['Total_Slab_Value'] / merged_addon['Total Primary Sales'] * 100)
                                 merged_addon['% vs Secondary Sales'] = (merged_addon['Total_Slab_Value'] / merged_addon['Total Secondary Sales'] * 100)
-                                
-                                # Percentage of created companies that got this slab
                                 merged_addon['% Companies Rewarded'] = (merged_addon['Slab_Count'] / merged_addon['Total Created Companies'] * 100)
                                 
-                                # Clean Infinity values if sales are zero
                                 for col in ['% vs Primary Sales', '% vs Secondary Sales', '% of Total Slab Count', '% Companies Rewarded']:
                                     merged_addon[col] = merged_addon[col].replace([float('inf'), -float('inf')], 0).fillna(0)
                                 
-                                # Rename for display
                                 merged_addon.rename(columns={'Slab_Count': 'Gift Count'}, inplace=True)
                                 
-                                # 6. Format nicely for screen
                                 display_cols_list = [
                                     'District', 'Parent Company', 'Total Created Companies', 'Gift Count', 
                                     '% Companies Rewarded', '% of Total Slab Count', 
@@ -628,7 +645,6 @@ if tab3 is not None:
                                 
                                 st.dataframe(display_addon, use_container_width=True)
                                 
-                                # Pure Numeric Excel Download
                                 numeric_csv = merged_addon[display_cols_list].to_csv(index=False).encode('utf-8')
                                 st.download_button(
                                     label="📥 Download Add-On Report (Numeric Format for Excel)", 
@@ -637,6 +653,7 @@ if tab3 is not None:
                                     mime="text/csv",
                                     type="primary"
                                 )
+
 # --------- TAB 4: LOCKED GIFTS BREAKDOWN ---------
 with tab4:
     st.subheader("🛍️ Locked Gifts Breakdown")
@@ -762,7 +779,6 @@ if tab5 is not None:
     with tab5:
         st.subheader("🚚 Deliver Gifts")
         
-        # Filter data to ONLY show customers with locked gifts
         locked_df = base_df[(base_df['selected_gift'].notna()) & (base_df['selected_gift'].str.strip() != "")].copy()
         
         if locked_df.empty:
@@ -828,7 +844,6 @@ if tab5 is not None:
                     st.info(f"🎁 **To Deliver:** {allocated_gift}")
                     st.markdown("### 📸 Capture Delivery Proof")
                     
-                    # --- FOOLPROOF CAMERA & GPS SECTION ---
                     with st.expander("👉 Tap here to Open Camera & GPS", expanded=True):
                         st.info("📍 **STEP 1:** Click the 'Get Location' button below and wait for coordinates to appear!")
                         loc = streamlit_geolocation()
@@ -842,7 +857,6 @@ if tab5 is not None:
                     skip_photo = st.checkbox("🧪 Testing Mode: Save without taking a photo")
 
                     if st.button("Confirm & Save Delivery", use_container_width=True):
-                        # Check if we have either GPS OR a manual address
                         has_gps = loc and 'latitude' in loc and loc['latitude'] is not None
                         has_manual = len(manual_address.strip()) > 0
                         
@@ -854,7 +868,6 @@ if tab5 is not None:
                             with st.spinner("Stamping photo and saving to database..."):
                                 delivery_time = datetime.now().strftime("%Y-%m-%d %I:%M %p")
                                 
-                                # Determine the final location data to save
                                 if has_gps:
                                     lat = loc['latitude']
                                     lon = loc['longitude']
@@ -866,7 +879,6 @@ if tab5 is not None:
                                         address = "Address lookup failed"
                                     stamp_text = f"GPS: {lat}, {lon}\nTime: {delivery_time}"
                                 else:
-                                    # Fallback to manual address
                                     lat = "Manual"
                                     lon = "Manual"
                                     address = manual_address
@@ -902,7 +914,7 @@ if tab5 is not None:
                                             delivery_lon = :lon,
                                             delivery_address = :addr,
                                             delivery_time = :time
-                                        WHERE customermobile = :mobile
+                                        WHERE CAST(customermobile AS TEXT) = :mobile
                                     """)
                                     conn.execute(query, {
                                         "photo": final_photo_b64,
@@ -910,7 +922,7 @@ if tab5 is not None:
                                         "lon": str(lon),
                                         "addr": address,
                                         "time": delivery_time,
-                                        "mobile": selected_del_mobile
+                                        "mobile": str(selected_del_mobile)
                                     })
                                 
                                 st.success("🎉 Delivery verified and saved successfully!")
@@ -924,7 +936,6 @@ if tab6 is not None:
         st.subheader("🗺️ Admin Delivery Map & Proofs")
         st.write("Hover over the delivery trucks to see the proof photo and address!")
         
-        # 1. Map Filter
         parents_map = ["All Parent Companies"] + sorted(base_df['ParentCompanyName'].dropna().unique().tolist())
         sel_parent_map = st.selectbox("Filter Map by Parent Company:", parents_map)
         
@@ -936,34 +947,28 @@ if tab6 is not None:
         delivered_map_df = map_df[map_df['delivery_status'] == 'Delivered'].copy()
         pending_map_df = map_df[(map_df['selected_gift'].str.strip() != "") & (map_df['delivery_status'] != 'Delivered')]
         
-        # 2. Render the Custom Folium Map
         if not delivered_map_df.empty:
             delivered_map_df['Lat'] = pd.to_numeric(delivered_map_df['delivery_lat'], errors='coerce')
             delivered_map_df['Lon'] = pd.to_numeric(delivered_map_df['delivery_lon'], errors='coerce')
             delivered_map_df = delivered_map_df.dropna(subset=['Lat', 'Lon'])
             
             if not delivered_map_df.empty:
-                # Center the map automatically
                 center_lat = delivered_map_df['Lat'].mean()
                 center_lon = delivered_map_df['Lon'].mean()
                 
-                # Create the base map
                 m = folium.Map(location=[center_lat, center_lon], zoom_start=11)
                 
-                # Plot each delivery truck
                 for idx, row in delivered_map_df.iterrows():
                     photo_b64 = row.get('delivery_photo', '')
                     addr = row.get('delivery_address', 'Address not recorded')
                     comp = row['CompanyName']
                     gift = row['selected_gift']
                     
-                    # Create the Image HTML if the photo exists
                     if photo_b64:
                         img_html = f'<img src="data:image/jpeg;base64,{photo_b64}" style="width: 200px; border-radius: 5px; margin-top: 8px; border: 1px solid #ddd;">'
                     else:
                         img_html = '<p style="font-size:10px; color:gray; font-style:italic;">No photo available</p>'
                     
-                    # Build the Hover Card
                     hover_html = f'''
                     <div style="width: 200px; font-family: sans-serif;">
                         <h4 style="color: #00b84c; margin: 0 0 5px 0;">{comp}</h4>
@@ -973,17 +978,14 @@ if tab6 is not None:
                     </div>
                     '''
                     
-                    # Create the Delivery Truck Icon
                     custom_icon = folium.Icon(color="green", icon="truck", prefix="fa")
                     
-                    # Add to map
                     folium.Marker(
                         location=[row['Lat'], row['Lon']],
                         icon=custom_icon,
                         tooltip=folium.Tooltip(hover_html)
                     ).add_to(m)
                 
-                # Render the map in Streamlit (returned_objects=[] makes it run much faster)
                 st_folium(m, use_container_width=True, height=600, returned_objects=[])
                 
             else:
@@ -993,7 +995,6 @@ if tab6 is not None:
 
         st.divider()
         
-        # 3. Quick Proof Verification Tool
         st.subheader("📸 Verify Delivery Photos")
         if delivered_map_df.empty:
             st.write("No photos to review.")
@@ -1029,7 +1030,6 @@ if tab6 is not None:
 
         st.divider()
         
-        # 4. Pending Reminder List
         st.subheader(f"⏳ Pending Deliveries ({len(pending_map_df)})")
         st.write("*(Note: Pending customers cannot be shown on the map because their GPS coordinates are not captured until the delivery person arrives at their shop).*")
         
@@ -1038,13 +1038,11 @@ if tab6 is not None:
         else:
             st.dataframe(pending_map_df[['ParentCompanyName', 'CompanyName', 'customermobile', 'selected_gift']], use_container_width=True)
 
-
 # --------- TAB 7: PRIMARY VS SECONDARY (ADMIN ONLY) ---------
 if tab7 is not None:
     with tab7:
         st.subheader("📈 Primary vs Secondary Sales Comparison")
         
-        # --- 1. ADMIN DATABASE UPLOAD TOOL ---
         with st.expander("⚙️ Setup / Update Primary Database Table", expanded=primary_df.empty):
             st.info("Upload your 'july to march sale.xlsx' file here to build or update the database table.")
             uploaded_file = st.file_uploader("Upload Primary Data", type=['csv', 'xlsx'])
@@ -1053,7 +1051,6 @@ if tab7 is not None:
                 if st.button("Save to SQL Database & Clear Cache", type="primary"):
                     with st.spinner("Building table in Neon SQL..."):
                         try:
-                            # Read file based on extension
                             if uploaded_file.name.endswith('.csv'):
                                 new_prim_df = pd.read_csv(uploaded_file)
                             else:
@@ -1069,7 +1066,6 @@ if tab7 is not None:
 
         st.divider()
 
-        # --- 2. THE COMPARISON REPORT ---
         if primary_df is None or primary_df.empty:
             st.warning("⚠️ Primary sales data not found. Please use the tool above to upload your file.")
             if st.button("🔄 Force Refresh Database"):
@@ -1078,15 +1074,12 @@ if tab7 is not None:
         else:
             st.success(f"📊 Primary Data loaded successfully! ({len(primary_df)} rows found)")
             
-            # 1. Create a Mapping to pull District from the base data
             district_map = base_df[['ParentCompanyName', 'ParentCompanyDistrict']].dropna().drop_duplicates(subset=['ParentCompanyName'])
             district_map['ParentCompanyName'] = district_map['ParentCompanyName'].astype(str).str.upper().str.strip()
 
-            # 2. Calculate Live Secondary Sales per Parent Company
             sec_sales = base_df.groupby('ParentCompanyName')['Total'].sum().reset_index()
             sec_sales.columns = ['ParentCompanyName', 'Live_Secondary_Sales']
             
-            # Dynamic Column Mapping
             st.info("⚙️ Map the columns from your Primary Database to configure the report:")
             col_map1, col_map2 = st.columns(2)
             
@@ -1098,42 +1091,31 @@ if tab7 is not None:
                     numeric_cols = primary_df.columns.tolist()
                 val_col = st.selectbox("Which column represents the Primary Sales Value?", numeric_cols)
                 
-            # --- AUTO-GENERATE DATA ---
-            # Group the primary data
             prim_sales = primary_df.groupby(dist_col)[val_col].sum().reset_index()
             
-            # Force both columns to be uppercase strings so the names match perfectly
             prim_sales[dist_col] = prim_sales[dist_col].astype(str).str.upper().str.strip()
             sec_sales['ParentCompanyName'] = sec_sales['ParentCompanyName'].astype(str).str.upper().str.strip()
             prim_sales.columns = ['ParentCompanyName', 'Static_Primary_Sales']
             
-            # Merge the Primary and Secondary datasets
             comparison_df = pd.merge(prim_sales, sec_sales, on='ParentCompanyName', how='outer').fillna(0)
-            
-            # Merge in the District Names
             comparison_df = pd.merge(comparison_df, district_map, on='ParentCompanyName', how='left')
             comparison_df['ParentCompanyDistrict'] = comparison_df['ParentCompanyDistrict'].fillna("Unknown")
             
-            # Calculate Variance (Secondary - Primary)
             comparison_df['Variance (Excess/Deficit)'] = comparison_df['Live_Secondary_Sales'] - comparison_df['Static_Primary_Sales']
             
-            # Reorder columns and rename
             comparison_df = comparison_df[['ParentCompanyDistrict', 'ParentCompanyName', 'Static_Primary_Sales', 'Live_Secondary_Sales', 'Variance (Excess/Deficit)']]
             comparison_df.rename(columns={'ParentCompanyDistrict': 'District'}, inplace=True)
 
             st.divider()
 
-            # --- 3. FILTERING & DYNAMIC TOTALS ---
             all_districts = sorted(comparison_df['District'].unique().tolist())
             selected_dist = st.selectbox("🔍 Filter Report by District:", ["All Districts"] + all_districts)
 
-            # Apply Filter
             if selected_dist != "All Districts":
                 display_df = comparison_df[comparison_df['District'] == selected_dist].copy()
             else:
                 display_df = comparison_df.copy()
 
-            # Calculate Dynamic Grand Totals based on filtered data
             total_prim = display_df['Static_Primary_Sales'].sum()
             total_sec = display_df['Live_Secondary_Sales'].sum()
             total_var = display_df['Variance (Excess/Deficit)'].sum()
@@ -1144,9 +1126,8 @@ if tab7 is not None:
             met2.metric("Grand Total Secondary Sales", f"₹ {total_sec:,.2f}")
             met3.metric("Grand Total Variance", f"₹ {total_var:,.2f}")
             
-            st.write("") # Spacer
+            st.write("") 
 
-            # Display Dataframe (Looks nice on screen, but stays pure numbers in the background!)
             st.dataframe(
                 display_df, 
                 use_container_width=True,
@@ -1159,7 +1140,6 @@ if tab7 is not None:
                 }
             )
             
-            # --- 4. EXCEL-READY DOWNLOAD BUTTON ---
             csv_export = display_df.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Download Data as CSV (Numeric Format for Excel)", 
@@ -1169,7 +1149,6 @@ if tab7 is not None:
                 type="primary"
             )
             
-            # Visual Chart
             st.markdown(f"### Top 10 Distributors ({selected_dist})")
             chart_data = display_df.sort_values('Live_Secondary_Sales', ascending=False).head(10)
             st.bar_chart(data=chart_data.set_index('ParentCompanyName')[['Static_Primary_Sales', 'Live_Secondary_Sales']])
