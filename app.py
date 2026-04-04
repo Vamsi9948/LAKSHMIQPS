@@ -421,7 +421,7 @@ if tab3 is not None:
 
             sum_df = pd.DataFrame(summary_data)
             
-            # --- NEW: ADD GRAND TOTAL ROW ---
+            # --- GRAND TOTAL ROW INJECTED ---
             if st.session_state.role == 'admin' and not sum_df.empty:
                 grand_slab_value = sum_df["Total Slab Value"].sum()
                 grand_reward_pct = (grand_total_spend / grand_slab_value * 100) if grand_slab_value > 0 else 0
@@ -492,7 +492,7 @@ if tab3 is not None:
                     # ---------------------------------------------------------
                     st.divider()
                     st.write(f"### 🏢 Parent Company Breakdown for: {selected_slab_view}")
-                    st.write("This groups the slab count by Parent Company and analyzes their performance against Primary and Secondary Sales.")
+                    st.write("This report analyzes how the awarded gifts compare against the Parent Company's total created customers, Primary Sales, and Secondary Sales.")
                     
                     if primary_df is None or primary_df.empty:
                         st.warning("⚠️ Primary sales data not found. Please upload your Primary Data in Tab 7 to unlock this report.")
@@ -510,19 +510,25 @@ if tab3 is not None:
                                 df_temp = df_details.copy()
                                 df_temp['Calculated_Slab_Value'] = df_temp['Quantity'] * df_temp['Slab Amount']
                                 
-                                # 1. Group by District and Parent Company, Count Unique Companies
+                                # 1. Group by District and Parent Company (Slab stats)
                                 parent_summary = df_temp.groupby(['District', 'Parent Company']).agg(
-                                    Company_Count=('Company Name', 'nunique'),
                                     Slab_Count=('Quantity', 'sum'),
                                     Total_Slab_Value=('Calculated_Slab_Value', 'sum')
                                 ).reset_index()
                                 
                                 parent_summary['Parent Company'] = parent_summary['Parent Company'].astype(str).str.upper().str.strip()
                                 
-                                # 2. Get Live Secondary Sales
-                                sec_sales_addon = base_df.groupby('ParentCompanyName')['Total'].sum().reset_index()
+                                # 2. Get Live Secondary Sales & TOTAL CREATED COMPANIES (Base Data)
+                                sec_sales_addon = base_df.groupby('ParentCompanyName').agg(
+                                    Total_Secondary_Sales=('Total', 'sum'),
+                                    Total_Created_Companies=('customermobile', 'nunique')
+                                ).reset_index()
                                 sec_sales_addon['ParentCompanyName'] = sec_sales_addon['ParentCompanyName'].astype(str).str.upper().str.strip()
-                                sec_sales_addon.rename(columns={'ParentCompanyName': 'Parent Company', 'Total': 'Total Secondary Sales'}, inplace=True)
+                                sec_sales_addon.rename(columns={
+                                    'ParentCompanyName': 'Parent Company', 
+                                    'Total_Secondary_Sales': 'Total Secondary Sales',
+                                    'Total_Created_Companies': 'Total Created Companies'
+                                }, inplace=True)
                                 
                                 # 3. Get Primary Sales
                                 prim_sales_addon = primary_df.groupby(p_dist_col)[p_val_col].sum().reset_index()
@@ -540,26 +546,37 @@ if tab3 is not None:
                                 merged_addon['% vs Primary Sales'] = (merged_addon['Total_Slab_Value'] / merged_addon['Total Primary Sales'] * 100)
                                 merged_addon['% vs Secondary Sales'] = (merged_addon['Total_Slab_Value'] / merged_addon['Total Secondary Sales'] * 100)
                                 
+                                # Percentage of created companies that got this slab
+                                merged_addon['% Companies Rewarded'] = (merged_addon['Slab_Count'] / merged_addon['Total Created Companies'] * 100)
+                                
                                 # Clean Infinity values if sales are zero
-                                for col in ['% vs Primary Sales', '% vs Secondary Sales', '% of Total Slab Count']:
+                                for col in ['% vs Primary Sales', '% vs Secondary Sales', '% of Total Slab Count', '% Companies Rewarded']:
                                     merged_addon[col] = merged_addon[col].replace([float('inf'), -float('inf')], 0).fillna(0)
                                 
                                 # Rename for display
-                                merged_addon.rename(columns={'Company_Count': 'Company Count', 'Slab_Count': 'Gift Count'}, inplace=True)
+                                merged_addon.rename(columns={'Slab_Count': 'Gift Count'}, inplace=True)
                                 
                                 # 6. Format nicely for screen
-                                display_addon = merged_addon[['District', 'Parent Company', 'Company Count', 'Gift Count', '% of Total Slab Count', 'Total Primary Sales', 'Total Secondary Sales', '% vs Primary Sales', '% vs Secondary Sales']].copy()
+                                display_cols_list = [
+                                    'District', 'Parent Company', 'Total Created Companies', 'Gift Count', 
+                                    '% Companies Rewarded', '% of Total Slab Count', 
+                                    'Total Primary Sales', 'Total Secondary Sales', 
+                                    '% vs Primary Sales', '% vs Secondary Sales'
+                                ]
+                                
+                                display_addon = merged_addon[display_cols_list].copy()
                                 
                                 display_addon['Total Primary Sales'] = display_addon['Total Primary Sales'].apply(lambda x: f"₹ {x:,.2f}")
                                 display_addon['Total Secondary Sales'] = display_addon['Total Secondary Sales'].apply(lambda x: f"₹ {x:,.2f}")
                                 display_addon['% of Total Slab Count'] = display_addon['% of Total Slab Count'].apply(lambda x: f"{x:,.2f}%")
                                 display_addon['% vs Primary Sales'] = display_addon['% vs Primary Sales'].apply(lambda x: f"{x:,.2f}%")
                                 display_addon['% vs Secondary Sales'] = display_addon['% vs Secondary Sales'].apply(lambda x: f"{x:,.2f}%")
+                                display_addon['% Companies Rewarded'] = display_addon['% Companies Rewarded'].apply(lambda x: f"{x:,.2f}%")
                                 
                                 st.dataframe(display_addon, use_container_width=True)
                                 
                                 # Pure Numeric Excel Download
-                                numeric_csv = merged_addon[['District', 'Parent Company', 'Company Count', 'Gift Count', '% of Total Slab Count', 'Total Primary Sales', 'Total Secondary Sales', '% vs Primary Sales', '% vs Secondary Sales']].to_csv(index=False).encode('utf-8')
+                                numeric_csv = merged_addon[display_cols_list].to_csv(index=False).encode('utf-8')
                                 st.download_button(
                                     label="📥 Download Add-On Report (Numeric Format for Excel)", 
                                     data=numeric_csv, 
