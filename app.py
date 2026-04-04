@@ -352,8 +352,11 @@ if tab3 is not None:
     with tab3:
         st.subheader("📦 Projected Slab Breakdown")
         
-        # --- FILTER OUT BLOCKED CUSTOMERS SO TOTALS DROP ---
-        report_df_slab = base_df[base_df.get('is_blocked', 'No') != 'Yes'].copy()
+       # --- SAFE FILTER OUT BLOCKED CUSTOMERS ---
+        if 'is_blocked' in base_df.columns:
+            report_df_slab = base_df[base_df['is_blocked'] != 'Yes'].copy()
+        else:
+            report_df_slab = base_df.copy()
         
         if st.session_state.role == 'admin':
             dist_filter_slab = st.selectbox("Filter by District:", ["All Districts"] + sorted(report_df_slab['ParentCompanyDistrict'].dropna().unique().tolist()), key="slab_dist_1")
