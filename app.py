@@ -360,6 +360,11 @@ with tab2:
     report_df = base_df.copy()
     display_cols = ['ParentCompanyDistrict', 'ParentCompanyName', 'CompanyName', 'customermobile', 'Total', 'selected_gift', 'delivery_status', 'delivery_time', 'is_blocked']
     
+    # --- NEW: INSTANT BLOCKED CUSTOMER FILTER ---
+    show_blocked = st.checkbox("🚫 Show Blocked Customers Only", help="Check this box to filter the table and only see blocked accounts.")
+    if show_blocked:
+        report_df = report_df[report_df.get('is_blocked', 'No') == 'Yes']
+    
     if st.session_state.role == 'admin':
         col1, col2 = st.columns(2)
         with col1:
@@ -370,22 +375,38 @@ with tab2:
             parent_filter = st.selectbox("Filter by Parent Company (Optional):", ["All"] + sorted(report_df['ParentCompanyName'].dropna().unique().tolist()))
             if parent_filter != "All":
                 report_df = report_df[report_df['ParentCompanyName'] == parent_filter]
-        st.dataframe(report_df[display_cols], use_container_width=True)
+        
+        if show_blocked and report_df.empty:
+            st.success("🎉 Great news! There are zero blocked customers in this selection.")
+        else:
+            st.dataframe(report_df[display_cols], use_container_width=True)
 
     elif st.session_state.role == 'district':
         parent_filter = st.selectbox("Select Parent Company:", ["All Parent Companies"] + sorted(report_df['ParentCompanyName'].dropna().unique().tolist()))
         if parent_filter != "All Parent Companies":
             report_df = report_df[report_df['ParentCompanyName'] == parent_filter]
-        st.dataframe(report_df[display_cols], use_container_width=True)
+            
+        if show_blocked and report_df.empty:
+            st.success("🎉 Great news! There are zero blocked customers in this selection.")
+        else:
+            st.dataframe(report_df[display_cols], use_container_width=True)
 
     elif st.session_state.role == 'parent_company':
-        st.dataframe(report_df[display_cols], use_container_width=True)
+        if show_blocked and report_df.empty:
+            st.success("🎉 Great news! You have zero blocked customers.")
+        else:
+            st.dataframe(report_df[display_cols], use_container_width=True)
 
     if not report_df.empty:
         csv = report_df[display_cols].to_csv(index=False).encode('utf-8')
-        st.download_button(label="Download Report as CSV", data=csv, file_name=f"customer_report_{st.session_state.username}.csv", mime="text/csv")
-
-# --------- TAB 3: SLAB WISE REPORT (Projected) ---------
+        
+        # Change the file name dynamically so you know it is a blocked list
+        if show_blocked:
+            file_export_name = f"BLOCKED_customer_report_{st.session_state.username}.csv"
+        else:
+            file_export_name = f"customer_report_{st.session_state.username}.csv"
+            
+        st.download_button(label="Download Report as CSV", data=csv, file_name=file_export_name, mime="text/csv")# --------- TAB 3: SLAB WISE REPORT (Projected) ---------
 if tab3 is not None:
     with tab3:
         st.subheader("📦 Projected Slab Breakdown")
