@@ -403,21 +403,51 @@ if tab3 is not None:
 
             for slab, count in active_slabs.items():
                 g_name = slab_to_gift.get(slab, "Unknown Gift")
-                row_data = {"Slab": int(slab), "Gift Name": g_name, "Quantity": count}
+                row_data = {"Slab": str(int(slab)), "Gift Name": g_name, "Quantity": count}
                 if st.session_state.role == 'admin':
                     unit_cost = slab_to_cost.get(slab, 0)
                     total_spend = count * unit_cost
                     total_slab_value = count * float(slab)
                     pct_of_grand = (total_spend / grand_total_spend * 100) if grand_total_spend > 0 else 0
                     reward_pct = (total_spend / total_slab_value * 100) if total_slab_value > 0 else 0
-                    row_data["Total Slab Value"] = f"{total_slab_value:,.0f}"
-                    row_data["Unit Cost (₹)"] = f"{unit_cost:,.2f}"
-                    row_data["Total Spend (₹)"] = f"{total_spend:,.2f}"
+                    
+                    # Store raw numbers first for Grand Total math later
+                    row_data["Total Slab Value"] = total_slab_value
+                    row_data["Unit Cost (₹)"] = unit_cost
+                    row_data["Total Spend (₹)"] = total_spend
                     row_data["Reward %"] = f"{reward_pct:.2f}%"
                     row_data["% of Grand Total"] = f"{pct_of_grand:.2f}%"
                 summary_data.append(row_data)
 
-            st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
+            sum_df = pd.DataFrame(summary_data)
+            
+            # --- NEW: ADD GRAND TOTAL ROW ---
+            if st.session_state.role == 'admin' and not sum_df.empty:
+                grand_slab_value = sum_df["Total Slab Value"].sum()
+                grand_reward_pct = (grand_total_spend / grand_slab_value * 100) if grand_slab_value > 0 else 0
+                
+                grand_row = {
+                    "Slab": "GRAND TOTAL",
+                    "Gift Name": "-",
+                    "Quantity": grand_total_gifts,
+                    "Total Slab Value": grand_slab_value,
+                    "Unit Cost (₹)": "-",
+                    "Total Spend (₹)": grand_total_spend,
+                    "Reward %": f"{grand_reward_pct:.2f}%",
+                    "% of Grand Total": "100.00%"
+                }
+                
+                # Format the numeric columns into beautiful text
+                sum_df["Total Slab Value"] = sum_df["Total Slab Value"].apply(lambda x: f"{x:,.0f}")
+                sum_df["Unit Cost (₹)"] = sum_df["Unit Cost (₹)"].apply(lambda x: f"{x:,.2f}")
+                sum_df["Total Spend (₹)"] = sum_df["Total Spend (₹)"].apply(lambda x: f"{x:,.2f}")
+                
+                grand_row["Total Slab Value"] = f"{grand_row['Total Slab Value']:,.0f}"
+                grand_row["Total Spend (₹)"] = f"{grand_row['Total Spend (₹)']:,.2f}"
+                
+                sum_df = pd.concat([sum_df, pd.DataFrame([grand_row])], ignore_index=True)
+
+            st.dataframe(sum_df, use_container_width=True)
             
             if st.session_state.role == 'admin':
                 st.markdown(f"#### **Grand Total Gifts: {grand_total_gifts} | Grand Total Spend: ₹{grand_total_spend:,.2f}**")
@@ -462,7 +492,7 @@ if tab3 is not None:
                     # ---------------------------------------------------------
                     st.divider()
                     st.write(f"### 🏢 Parent Company Breakdown for: {selected_slab_view}")
-                    st.write("This add-on groups the slab count by Parent Company and calculates the percentage of this slab's value against their Primary and Secondary Sales.")
+                    st.write("This groups the slab count by Parent Company and analyzes their performance against Primary and Secondary Sales.")
                     
                     if primary_df is None or primary_df.empty:
                         st.warning("⚠️ Primary sales data not found. Please upload your Primary Data in Tab 7 to unlock this report.")
@@ -477,16 +507,16 @@ if tab3 is not None:
                             
                         if st.button("Generate Parent Breakdown", type="secondary"):
                             with st.spinner("Calculating Breakdown..."):
-                                # 1. Get total slab count and slab value per Parent Company
                                 df_temp = df_details.copy()
                                 df_temp['Calculated_Slab_Value'] = df_temp['Quantity'] * df_temp['Slab Amount']
                                 
-                                parent_summary = df_temp.groupby('Parent Company').agg(
+                                # 1. Group by District and Parent Company, Count Unique Companies
+                                parent_summary = df_temp.groupby(['District', 'Parent Company']).agg(
+                                    Company_Count=('Company Name', 'nunique'),
                                     Slab_Count=('Quantity', 'sum'),
                                     Total_Slab_Value=('Calculated_Slab_Value', 'sum')
                                 ).reset_index()
                                 
-                                # Force text to uppercase for clean matching
                                 parent_summary['Parent Company'] = parent_summary['Parent Company'].astype(str).str.upper().str.strip()
                                 
                                 # 2. Get Live Secondary Sales
@@ -503,32 +533,37 @@ if tab3 is not None:
                                 merged_addon = pd.merge(parent_summary, sec_sales_addon, on='Parent Company', how='left').fillna(0)
                                 merged_addon = pd.merge(merged_addon, prim_sales_addon, on='Parent Company', how='left').fillna(0)
                                 
-                                # 5. Calculate Percentages (Slab Value / Total Sales * 100)
+                                # 5. Calculate Percentages
+                                total_slab_gifts_for_view = parent_summary['Slab_Count'].sum()
+                                
+                                merged_addon['% of Total Slab Count'] = (merged_addon['Slab_Count'] / total_slab_gifts_for_view * 100)
                                 merged_addon['% vs Primary Sales'] = (merged_addon['Total_Slab_Value'] / merged_addon['Total Primary Sales'] * 100)
-                                merged_addon['% vs Primary Sales'] = merged_addon['% vs Primary Sales'].replace([float('inf'), -float('inf')], 0).fillna(0)
-                                
                                 merged_addon['% vs Secondary Sales'] = (merged_addon['Total_Slab_Value'] / merged_addon['Total Secondary Sales'] * 100)
-                                merged_addon['% vs Secondary Sales'] = merged_addon['% vs Secondary Sales'].replace([float('inf'), -float('inf')], 0).fillna(0)
                                 
-                                # Cleanup columns for display
-                                merged_addon.rename(columns={'Slab_Count': 'Count'}, inplace=True)
+                                # Clean Infinity values if sales are zero
+                                for col in ['% vs Primary Sales', '% vs Secondary Sales', '% of Total Slab Count']:
+                                    merged_addon[col] = merged_addon[col].replace([float('inf'), -float('inf')], 0).fillna(0)
+                                
+                                # Rename for display
+                                merged_addon.rename(columns={'Company_Count': 'Company Count', 'Slab_Count': 'Gift Count'}, inplace=True)
                                 
                                 # 6. Format nicely for screen
-                                display_addon = merged_addon[['Parent Company', 'Count', 'Total Primary Sales', 'Total Secondary Sales', '% vs Primary Sales', '% vs Secondary Sales']].copy()
+                                display_addon = merged_addon[['District', 'Parent Company', 'Company Count', 'Gift Count', '% of Total Slab Count', 'Total Primary Sales', 'Total Secondary Sales', '% vs Primary Sales', '% vs Secondary Sales']].copy()
                                 
                                 display_addon['Total Primary Sales'] = display_addon['Total Primary Sales'].apply(lambda x: f"₹ {x:,.2f}")
                                 display_addon['Total Secondary Sales'] = display_addon['Total Secondary Sales'].apply(lambda x: f"₹ {x:,.2f}")
+                                display_addon['% of Total Slab Count'] = display_addon['% of Total Slab Count'].apply(lambda x: f"{x:,.2f}%")
                                 display_addon['% vs Primary Sales'] = display_addon['% vs Primary Sales'].apply(lambda x: f"{x:,.2f}%")
                                 display_addon['% vs Secondary Sales'] = display_addon['% vs Secondary Sales'].apply(lambda x: f"{x:,.2f}%")
                                 
                                 st.dataframe(display_addon, use_container_width=True)
                                 
                                 # Pure Numeric Excel Download
-                                numeric_csv = merged_addon[['Parent Company', 'Count', 'Total Primary Sales', 'Total Secondary Sales', '% vs Primary Sales', '% vs Secondary Sales']].to_csv(index=False).encode('utf-8')
+                                numeric_csv = merged_addon[['District', 'Parent Company', 'Company Count', 'Gift Count', '% of Total Slab Count', 'Total Primary Sales', 'Total Secondary Sales', '% vs Primary Sales', '% vs Secondary Sales']].to_csv(index=False).encode('utf-8')
                                 st.download_button(
                                     label="📥 Download Add-On Report (Numeric Format for Excel)", 
                                     data=numeric_csv, 
-                                    file_name=f"Parent_Slab_Breakdown_{selected_slab_view.split(' - ')[0]}.csv", 
+                                    file_name=f"Parent_Slab_Breakdown_{str(selected_slab_view).split(' - ')[0]}.csv", 
                                     mime="text/csv",
                                     type="primary"
                                 )
