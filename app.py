@@ -351,7 +351,9 @@ with tab2:
 if tab3 is not None:
     with tab3:
         st.subheader("📦 Projected Slab Breakdown")
-        report_df_slab = base_df.copy()
+        
+        # --- FILTER OUT BLOCKED CUSTOMERS SO TOTALS DROP ---
+        report_df_slab = base_df[base_df.get('is_blocked', 'No') != 'Yes'].copy()
         
         if st.session_state.role == 'admin':
             dist_filter_slab = st.selectbox("Filter by District:", ["All Districts"] + sorted(report_df_slab['ParentCompanyDistrict'].dropna().unique().tolist()), key="slab_dist_1")
@@ -488,7 +490,55 @@ if tab3 is not None:
                     st.download_button(label="Download CSV", data=df_details.to_csv(index=False).encode('utf-8'), file_name=file_name_out, mime="text/csv")
                     
                     # ---------------------------------------------------------
-                    # NEW ADD-ON: PARENT COMPANY WISE BREAKDOWN FOR THE SLAB
+                    # NEW: QUICK BLOCK / UNBLOCK DIRECTLY FROM THIS TAB
+                    # ---------------------------------------------------------
+                    if st.session_state.role == 'admin':
+                        st.write("")
+                        with st.expander("🚫 Quick Block / Unblock Customer Status", expanded=False):
+                            st.write("Search for any customer (Active or Blocked) in this district to manage their status.")
+                            
+                            # Use base_df to include blocked customers in the search dropdown
+                            manage_df = base_df.copy()
+                            if dist_filter_slab != "All Districts":
+                                manage_df = manage_df[manage_df['ParentCompanyDistrict'] == dist_filter_slab]
+                                
+                            block_options = ["-- Search Customer --"] + manage_df.apply(
+                                lambda row: f"{row['CompanyName']} (Mobile: {row['customermobile']}) - Status: {'BLOCKED 🚫' if row.get('is_blocked', 'No') == 'Yes' else 'ACTIVE ✅'}", axis=1
+                            ).tolist()
+                            
+                            sel_manage = st.selectbox("Select Customer:", block_options, key="manage_block_tab3")
+                            
+                            if sel_manage != "-- Search Customer --":
+                                mobile_match = re.search(r"Mobile: (\d+)", sel_manage)
+                                if mobile_match:
+                                    target_mobile = int(mobile_match.group(1))
+                                    target_data = manage_df[manage_df['customermobile'] == target_mobile].iloc[0]
+                                    is_currently_blocked = target_data.get('is_blocked', 'No')
+                                    
+                                    col_b1, col_b2 = st.columns([3, 1])
+                                    with col_b1:
+                                        if is_currently_blocked == 'Yes':
+                                            st.error(f"**{target_data['CompanyName']}** is currently BLOCKED.")
+                                        else:
+                                            st.success(f"**{target_data['CompanyName']}** is currently ACTIVE.")
+                                            
+                                    with col_b2:
+                                        if is_currently_blocked == 'Yes':
+                                            if st.button("🔓 Unblock", use_container_width=True, type="primary"):
+                                                with engine.begin() as conn:
+                                                    conn.execute(text("UPDATE sales_data SET is_blocked = 'No' WHERE customermobile = :mobile"), {"mobile": target_mobile})
+                                                load_database_data.clear()
+                                                st.rerun()
+                                        else:
+                                            if st.button("🚫 Block", use_container_width=True):
+                                                with engine.begin() as conn:
+                                                    # Blocking also revokes any locked gifts automatically
+                                                    conn.execute(text("UPDATE sales_data SET is_blocked = 'Yes', selected_gift = '', delivery_status = 'Pending' WHERE customermobile = :mobile"), {"mobile": target_mobile})
+                                                load_database_data.clear()
+                                                st.rerun()
+
+                    # ---------------------------------------------------------
+                    # PARENT COMPANY WISE BREAKDOWN FOR THE SLAB
                     # ---------------------------------------------------------
                     st.divider()
                     st.write(f"### 🏢 Parent Company Breakdown for: {selected_slab_view}")
