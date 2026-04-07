@@ -196,15 +196,33 @@ if not st.session_state.logged_in:
     st.stop()
     
 # --- 4. MAIN DASHBOARD ---
-st.sidebar.title(f"Welcome, {st.session_state.username}")
-st.sidebar.markdown(f"**Role:** {st.session_state.role.title()}")
 
-if st.sidebar.button("Log Out"):
-    st.query_params.clear()
-    st.session_state.clear()
-    st.rerun()
+# --- SMART DISPLAY NAME (Fetches actual Parent Company Name) ---
+if st.session_state.role == 'parent_company':
+    try:
+        # Look up the actual Parent Company Name from the database using their scope (PCID)
+        pc_name = customers[customers['pcidd'] == st.session_state.scope]['ParentCompanyName'].iloc[0]
+        display_name = f"{pc_name} (PCID: {st.session_state.scope})"
+    except:
+        display_name = st.session_state.username
+else:
+    display_name = st.session_state.username
 
+# --- MOBILE-FRIENDLY TOP BAR & LOGOUT ---
 st.title("🎁 Gift Allocation Dashboard")
+
+head_col1, head_col2 = st.columns([3, 1])
+with head_col1:
+    st.markdown(f"### 👤 Welcome, {display_name}")
+    st.markdown(f"**Role:** {st.session_state.role.title().replace('_', ' ')}")
+with head_col2:
+    st.write("") # Spacer to push the button down slightly
+    if st.button("🚪 Log Out", use_container_width=True, type="primary"):
+        st.query_params.clear()
+        st.session_state.clear()
+        st.rerun()
+        
+st.divider()
 
 # --- DEFINE BASE_DF BASED ON USER ROLE ---
 if st.session_state.role == 'admin':
@@ -216,7 +234,17 @@ elif st.session_state.role == 'parent_company':
 else:
     base_df = pd.DataFrame() 
             
-# Dynamic Tabs based on Role
+# --- DEFINE BASE_DF BASED ON USER ROLE ---
+if st.session_state.role == 'admin':
+    base_df = customers.copy()
+elif st.session_state.role == 'district':
+    base_df = customers[customers['ParentCompanyDistrict'] == st.session_state.scope].copy()
+elif st.session_state.role == 'parent_company':
+    base_df = customers[customers['pcidd'] == st.session_state.scope].copy()
+else:
+    base_df = pd.DataFrame() 
+            
+# --- DYNAMIC TABS BASED ON ROLE ---
 if st.session_state.role == 'admin':
     tabs = st.tabs(["🎁 Allocate Gifts", "📊 Customer Wise Report", "📦 Projected Breakdown", "🛍️ Locked Gifts Breakdown", "🚚 Deliver Gifts", "🗺️ Admin Map & Proofs", "📈 Primary vs Secondary"])
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6]
@@ -231,7 +259,6 @@ else:
     tab3 = None
     tab6 = None
     tab7 = None
-
 # --------- TAB 1: ALLOCATE GIFTS ---------
 with tab1:
     st.subheader("1️⃣ Select a Customer")
