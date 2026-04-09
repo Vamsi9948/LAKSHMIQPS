@@ -1208,10 +1208,10 @@ if tab7 is not None:
         
         with st.expander("⚙️ Setup / Update Primary Database Table", expanded=primary_df.empty):
             st.info("Upload your 'july to march sale.xlsx' file here to build or update the database table.")
-            uploaded_file = st.file_uploader("Upload Primary Data", type=['csv', 'xlsx'], key="primary_data_uploader_admin")
+            uploaded_file = st.file_uploader("Upload Primary Data", type=['csv', 'xlsx'], key="tab7_master_uploader")
             
             if uploaded_file is not None:
-                if st.button("Save to SQL Database & Clear Cache", type="primary"):
+                if st.button("Save to SQL Database & Clear Cache", type="primary", key="tab7_save_btn"):
                     with st.spinner("Building table in Neon SQL..."):
                         try:
                             if uploaded_file.name.endswith('.csv'):
@@ -1231,7 +1231,7 @@ if tab7 is not None:
 
         if primary_df is None or primary_df.empty:
             st.warning("⚠️ Primary sales data not found. Please use the tool above to upload your file.")
-            if st.button("🔄 Force Refresh Database"):
+            if st.button("🔄 Force Refresh Database", key="tab7_refresh_btn"):
                 st.cache_data.clear()
                 st.rerun()
         else:
@@ -1240,7 +1240,6 @@ if tab7 is not None:
             district_map = base_df[['ParentCompanyName', 'ParentCompanyDistrict']].dropna().drop_duplicates(subset=['ParentCompanyName'])
             district_map['ParentCompanyName'] = district_map['ParentCompanyName'].astype(str).str.upper().str.strip()
 
-            # --- NEW: EXCLUDE BLOCKED CUSTOMERS FROM SECONDARY SALES MATH ---
             if 'is_blocked' in base_df.columns:
                 active_base_df = base_df[base_df['is_blocked'] != 'Yes'].copy()
             else:
@@ -1253,12 +1252,12 @@ if tab7 is not None:
             col_map1, col_map2 = st.columns(2)
             
             with col_map1:
-                dist_col = st.selectbox("Which column represents the Distributor?", primary_df.columns.tolist(), key="tab7_distributor_select")
+                dist_col = st.selectbox("Which column represents the Distributor?", primary_df.columns.tolist(), key="tab7_dist_mapper")
             with col_map2:
                 numeric_cols = primary_df.select_dtypes(include=['number']).columns.tolist()
                 if not numeric_cols:
                     numeric_cols = primary_df.columns.tolist()
-                val_col = st.selectbox("Which column represents the Primary Sales Value?", numeric_cols, key="tab7_value_select")
+                val_col = st.selectbox("Which column represents the Primary Sales Value?", numeric_cols, key="tab7_val_mapper")
                 
             prim_sales = primary_df.groupby(dist_col)[val_col].sum().reset_index()
             
@@ -1278,7 +1277,7 @@ if tab7 is not None:
             st.divider()
 
             all_districts = sorted(comparison_df['District'].unique().tolist())
-            selected_dist = st.selectbox("🔍 Filter Report by District:", ["All Districts"] + all_districts)
+            selected_dist = st.selectbox("🔍 Filter Report by District:", ["All Districts"] + all_districts, key="tab7_district_filter")
 
             if selected_dist != "All Districts":
                 display_df = comparison_df[comparison_df['District'] == selected_dist].copy()
@@ -1315,7 +1314,8 @@ if tab7 is not None:
                 data=csv_export, 
                 file_name=f"Primary_vs_Secondary_{selected_dist.replace(' ', '_')}.csv", 
                 mime="text/csv",
-                type="primary"
+                type="primary",
+                key="tab7_download_btn"
             )
             
             st.markdown(f"### Top 10 Distributors ({selected_dist})")
