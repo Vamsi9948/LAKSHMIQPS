@@ -1253,12 +1253,12 @@ if tab7 is not None:
             col_map1, col_map2 = st.columns(2)
             
             with col_map1:
-                dist_col = st.selectbox("Which column represents the Distributor?", primary_df.columns.tolist())
+                dist_col = st.selectbox("Which column represents the Distributor?", primary_df.columns.tolist(), key="tab7_distributor_select")
             with col_map2:
                 numeric_cols = primary_df.select_dtypes(include=['number']).columns.tolist()
                 if not numeric_cols:
                     numeric_cols = primary_df.columns.tolist()
-                val_col = st.selectbox("Which column represents the Primary Sales Value?", numeric_cols)
+                val_col = st.selectbox("Which column represents the Primary Sales Value?", numeric_cols, key="tab7_value_select")
                 
             prim_sales = primary_df.groupby(dist_col)[val_col].sum().reset_index()
             
