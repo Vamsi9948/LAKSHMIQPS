@@ -1200,3 +1200,124 @@ if tab7 is not None:
             st.markdown(f"### Top 10 Distributors ({selected_dist})")
             chart_data = display_df.sort_values('Live_Secondary_Sales', ascending=False).head(10)
             st.bar_chart(data=chart_data.set_index('ParentCompanyName')[['Static_Primary_Sales', 'Live_Secondary_Sales']])
+
+# --------- TAB 7: PRIMARY VS SECONDARY (ADMIN ONLY) ---------
+if tab7 is not None:
+    with tab7:
+        st.subheader("📈 Primary vs Secondary Sales Comparison")
+        
+        with st.expander("⚙️ Setup / Update Primary Database Table", expanded=primary_df.empty):
+            st.info("Upload your 'july to march sale.xlsx' file here to build or update the database table.")
+            uploaded_file = st.file_uploader("Upload Primary Data", type=['csv', 'xlsx'])
+            
+            if uploaded_file is not None:
+                if st.button("Save to SQL Database & Clear Cache", type="primary"):
+                    with st.spinner("Building table in Neon SQL..."):
+                        try:
+                            if uploaded_file.name.endswith('.csv'):
+                                new_prim_df = pd.read_csv(uploaded_file)
+                            else:
+                                new_prim_df = pd.read_excel(uploaded_file)
+                                
+                            new_prim_df.to_sql("primary_sales", engine, if_exists="replace", index=False)
+                            st.success("✅ Table 'primary_sales' successfully updated in your database!")
+                            st.cache_data.clear()
+                            time.sleep(1.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Database error: {e}")
+
+        st.divider()
+
+        if primary_df is None or primary_df.empty:
+            st.warning("⚠️ Primary sales data not found. Please use the tool above to upload your file.")
+            if st.button("🔄 Force Refresh Database"):
+                st.cache_data.clear()
+                st.rerun()
+        else:
+            st.success(f"📊 Primary Data loaded successfully! ({len(primary_df)} rows found)")
+            
+            district_map = base_df[['ParentCompanyName', 'ParentCompanyDistrict']].dropna().drop_duplicates(subset=['ParentCompanyName'])
+            district_map['ParentCompanyName'] = district_map['ParentCompanyName'].astype(str).str.upper().str.strip()
+
+            # --- NEW: EXCLUDE BLOCKED CUSTOMERS FROM SECONDARY SALES MATH ---
+            if 'is_blocked' in base_df.columns:
+                active_base_df = base_df[base_df['is_blocked'] != 'Yes'].copy()
+            else:
+                active_base_df = base_df.copy()
+
+            sec_sales = active_base_df.groupby('ParentCompanyName')['Total'].sum().reset_index()
+            sec_sales.columns = ['ParentCompanyName', 'Live_Secondary_Sales']
+            
+            st.info("⚙️ Map the columns from your Primary Database to configure the report:")
+            col_map1, col_map2 = st.columns(2)
+            
+            with col_map1:
+                dist_col = st.selectbox("Which column represents the Distributor?", primary_df.columns.tolist())
+            with col_map2:
+                numeric_cols = primary_df.select_dtypes(include=['number']).columns.tolist()
+                if not numeric_cols:
+                    numeric_cols = primary_df.columns.tolist()
+                val_col = st.selectbox("Which column represents the Primary Sales Value?", numeric_cols)
+                
+            prim_sales = primary_df.groupby(dist_col)[val_col].sum().reset_index()
+            
+            prim_sales[dist_col] = prim_sales[dist_col].astype(str).str.upper().str.strip()
+            sec_sales['ParentCompanyName'] = sec_sales['ParentCompanyName'].astype(str).str.upper().str.strip()
+            prim_sales.columns = ['ParentCompanyName', 'Static_Primary_Sales']
+            
+            comparison_df = pd.merge(prim_sales, sec_sales, on='ParentCompanyName', how='outer').fillna(0)
+            comparison_df = pd.merge(comparison_df, district_map, on='ParentCompanyName', how='left')
+            comparison_df['ParentCompanyDistrict'] = comparison_df['ParentCompanyDistrict'].fillna("Unknown")
+            
+            comparison_df['Variance (Excess/Deficit)'] = comparison_df['Live_Secondary_Sales'] - comparison_df['Static_Primary_Sales']
+            
+            comparison_df = comparison_df[['ParentCompanyDistrict', 'ParentCompanyName', 'Static_Primary_Sales', 'Live_Secondary_Sales', 'Variance (Excess/Deficit)']]
+            comparison_df.rename(columns={'ParentCompanyDistrict': 'District'}, inplace=True)
+
+            st.divider()
+
+            all_districts = sorted(comparison_df['District'].unique().tolist())
+            selected_dist = st.selectbox("🔍 Filter Report by District:", ["All Districts"] + all_districts)
+
+            if selected_dist != "All Districts":
+                display_df = comparison_df[comparison_df['District'] == selected_dist].copy()
+            else:
+                display_df = comparison_df.copy()
+
+            total_prim = display_df['Static_Primary_Sales'].sum()
+            total_sec = display_df['Live_Secondary_Sales'].sum()
+            total_var = display_df['Variance (Excess/Deficit)'].sum()
+
+            st.markdown(f"### 📈 Grand Totals for: **{selected_dist}**")
+            met1, met2, met3 = st.columns(3)
+            met1.metric("Grand Total Primary Sales", f"₹ {total_prim:,.2f}")
+            met2.metric("Grand Total Secondary Sales", f"₹ {total_sec:,.2f}")
+            met3.metric("Grand Total Variance", f"₹ {total_var:,.2f}")
+            
+            st.write("") 
+
+            st.dataframe(
+                display_df, 
+                use_container_width=True,
+                column_config={
+                    "District": st.column_config.TextColumn("District"),
+                    "ParentCompanyName": st.column_config.TextColumn("Distributor"),
+                    "Static_Primary_Sales": st.column_config.NumberColumn("Primary Sales", format="₹ %.2f"),
+                    "Live_Secondary_Sales": st.column_config.NumberColumn("Secondary Sales", format="₹ %.2f"),
+                    "Variance (Excess/Deficit)": st.column_config.NumberColumn("Variance", format="₹ %.2f")
+                }
+            )
+            
+            csv_export = display_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Data as CSV (Numeric Format for Excel)", 
+                data=csv_export, 
+                file_name=f"Primary_vs_Secondary_{selected_dist.replace(' ', '_')}.csv", 
+                mime="text/csv",
+                type="primary"
+            )
+            
+            st.markdown(f"### Top 10 Distributors ({selected_dist})")
+            chart_data = display_df.sort_values('Live_Secondary_Sales', ascending=False).head(10)
+            st.bar_chart(data=chart_data.set_index('ParentCompanyName')[['Static_Primary_Sales', 'Live_Secondary_Sales']])
