@@ -1208,7 +1208,7 @@ if tab7 is not None:
         
         with st.expander("⚙️ Setup / Update Primary Database Table", expanded=primary_df.empty):
             st.info("Upload your 'july to march sale.xlsx' file here to build or update the database table.")
-            uploaded_file = st.file_uploader("Upload Primary Data", type=['csv', 'xlsx'])
+           uploaded_file = st.file_uploader("Upload Primary Data", type=['csv', 'xlsx'], key="primary_data_uploader_admin")
             
             if uploaded_file is not None:
                 if st.button("Save to SQL Database & Clear Cache", type="primary"):
