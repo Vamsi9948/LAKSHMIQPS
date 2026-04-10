@@ -6,16 +6,10 @@ import re
 import time
 import base64
 from datetime import datetime
-from geopy.geocoders import Nominatim
-import folium
-from streamlit_folium import st_folium
-from streamlit_geolocation import streamlit_geolocation
-from PIL import Image, ImageDraw, ImageFont
 import io
 
 # --- HIDE STREAMLIT UI ---
 st.set_page_config(page_title="Gift Selection App", page_icon="🎁", layout="wide")
-
 hide_st_style = """
             <style>
             header {visibility: hidden !important;}
@@ -827,6 +821,11 @@ if tab5 is not None:
     with tab5:
         st.subheader("🚚 Deliver Gifts")
         
+        # --- LAZY LOADING IMPORTS (Only loads when Tab 5 is opened!) ---
+        from streamlit_geolocation import streamlit_geolocation
+        from geopy.geocoders import Nominatim
+        from PIL import Image, ImageDraw, ImageFont
+        
         locked_df = base_df[(base_df['selected_gift'].notna()) & (base_df['selected_gift'].str.strip() != "")].copy()
         
         if locked_df.empty:
@@ -984,6 +983,10 @@ if tab6 is not None:
         st.subheader("🗺️ Admin Delivery Map & Proofs")
         st.write("Hover over the delivery trucks to see the proof photo and address!")
         
+        # --- LAZY LOADING IMPORTS (Only loads when Admin opens the Map!) ---
+        import folium
+        from streamlit_folium import st_folium
+        
         parents_map = ["All Parent Companies"] + sorted(base_df['ParentCompanyName'].dropna().unique().tolist())
         sel_parent_map = st.selectbox("Filter Map by Parent Company:", parents_map)
         
@@ -1085,7 +1088,6 @@ if tab6 is not None:
             st.success("All locked gifts for this Parent Company have been delivered!")
         else:
             st.dataframe(pending_map_df[['ParentCompanyName', 'CompanyName', 'customermobile', 'selected_gift']], use_container_width=True)
-
 # --------- TAB 7: PRIMARY VS SECONDARY (ADMIN ONLY) ---------
 if tab7 is not None:
     with tab7:
