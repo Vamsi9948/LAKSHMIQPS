@@ -53,8 +53,8 @@ def init_connection():
 
 engine = init_connection()
 
-# This tells Streamlit to only download the data once every 10 minutes!
-@st.cache_data(ttl=600)
+# This tells Streamlit to only download the data once every 1 Hour!
+@st.cache_data(ttl=3600)
 def load_database_data():
     with engine.connect() as conn:
         cust = pd.read_sql("SELECT * FROM sales_data", conn)
