@@ -1323,3 +1323,5 @@ if tab7 is not None:
             st.markdown(f"### Top 10 Distributors ({selected_dist})")
             chart_data = display_df.sort_values('Live_Secondary_Sales', ascending=False).head(10)
             st.bar_chart(data=chart_data.set_index('ParentCompanyName')[['Static_Primary_Sales', 'Live_Secondary_Sales']])
+
+
