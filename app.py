@@ -77,9 +77,32 @@ try:
     gifts = gifts_raw.copy()
     primary_df = primary_raw.copy() 
     
-    slab_to_cost = {float(row['SLAB']): float(row['COST']) for _, row in costs_df.iterrows()}
+    # ==========================================
+    # 🛑 GLOBAL DATA CLEANUP FIX
+    # Force all SLAB and Text columns to match perfectly to prevent Zeros and "Unknown"!
+    # ==========================================
+
+    # 1. Clean the gifts table (Fixes "Unknown gift" and hidden spaces)
+    if 'SLAB' in gifts.columns:
+        gifts['SLAB'] = pd.to_numeric(gifts['SLAB'], errors='coerce')
+    if 'ITEM NAME ' in gifts.columns:
+        gifts['ITEM NAME '] = gifts['ITEM NAME '].astype(str).str.strip()
+
+    # 2. Clean the slab costs table (Fixes the Zeros)
+    if 'SLAB' in costs_df.columns:
+        costs_df['SLAB'] = pd.to_numeric(costs_df['SLAB'], errors='coerce')
+        
+    # 3. Clean the customers Total column (Prevents Float vs Integer math errors)
+    if 'Total' in customers.columns:
+        customers['Total'] = pd.to_numeric(customers['Total'], errors='coerce')
+
+    # ==========================================
     
-    gifts['SLAB'] = pd.to_numeric(gifts['SLAB'], errors='coerce')
+    # Safely drop any completely empty rows before building the dictionary
+    costs_clean = costs_df.dropna(subset=['SLAB', 'COST'])
+    slab_to_cost = {float(row['SLAB']): float(row['COST']) for _, row in costs_clean.iterrows()}
+    
+    # Fix the 1 Crore typo in the database
     gifts.loc[gifts['SLAB'] == 10000000, 'SLAB'] = 1000000
     
     # --- BULLETPROOF COLUMN CREATION ---
