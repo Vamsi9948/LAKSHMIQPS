@@ -78,23 +78,34 @@ try:
     primary_df = primary_raw.copy() 
     
     # ==========================================
-    # 🛑 GLOBAL DATA CLEANUP FIX
-    # Force all SLAB and Text columns to match perfectly to prevent Zeros and "Unknown"!
+    # 🛑 ULTIMATE DATA CLEANUP & CSV FIX
     # ==========================================
 
-    # 1. Clean the gifts table (Fixes "Unknown gift" and hidden spaces)
+    # 1. Fix PostgreSQL's automatic lowercase bug! 
+    # This scans your tables and forces the headers back to exactly what Python expects.
+    for col in gifts.columns:
+        if 'item' in col.lower() and 'name' in col.lower():
+            gifts.rename(columns={col: 'ITEM NAME '}, inplace=True)
+        if 'slab' in col.lower():
+            gifts.rename(columns={col: 'SLAB'}, inplace=True)
+            
+    for col in costs_df.columns:
+        if 'slab' in col.lower():
+            costs_df.rename(columns={col: 'SLAB'}, inplace=True)
+        if 'cost' in col.lower():
+            costs_df.rename(columns={col: 'COST'}, inplace=True)
+
+    # 2. Fix the Float vs Integer Bug (Forces exact numeric matches)
     if 'SLAB' in gifts.columns:
         gifts['SLAB'] = pd.to_numeric(gifts['SLAB'], errors='coerce')
-    if 'ITEM NAME ' in gifts.columns:
-        gifts['ITEM NAME '] = gifts['ITEM NAME '].astype(str).str.strip()
-
-    # 2. Clean the slab costs table (Fixes the Zeros)
     if 'SLAB' in costs_df.columns:
         costs_df['SLAB'] = pd.to_numeric(costs_df['SLAB'], errors='coerce')
-        
-    # 3. Clean the customers Total column (Prevents Float vs Integer math errors)
     if 'Total' in customers.columns:
         customers['Total'] = pd.to_numeric(customers['Total'], errors='coerce')
+        
+    # 3. Fix the "Unknown Gift" hidden space bug
+    if 'ITEM NAME ' in gifts.columns:
+        gifts['ITEM NAME '] = gifts['ITEM NAME '].astype(str).str.strip()
 
     # ==========================================
     
@@ -106,8 +117,8 @@ try:
     gifts.loc[gifts['SLAB'] == 10000000, 'SLAB'] = 1000000
     
     # --- BULLETPROOF COLUMN CREATION ---
-    columns_to_add = {
-        'selected_gift': "TEXT",
+    columns_to_add = {        
+         'selected_gift': "TEXT",
         'delivery_status': "TEXT DEFAULT 'Pending'",
         'delivery_photo': "TEXT",
         'delivery_lat': "TEXT",
