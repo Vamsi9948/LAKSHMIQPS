@@ -849,6 +849,66 @@ with tab4:
                     )
                 st.dataframe(df_details_locked, use_container_width=True)
                 st.download_button(label="Download CSV", data=df_details_locked.to_csv(index=False).encode('utf-8'), file_name=file_name_out_locked, mime="text/csv")
+# ==========================================
+        # 🧮 NEW FEATURE: PARENT COMPANY SLAB MATRIX
+        # ==========================================
+        st.divider()
+        st.write("### 🧮 Parent Company Slab Matrix Report")
+        st.write("This report shows exactly how many locked gift articles of each slab are assigned to each Parent Company.")
+        
+        if not locked_gift_counts:
+            st.info("No gifts have been locked yet, so the matrix is empty.")
+        else:
+            # Flatten the existing locked data into a clean list
+            matrix_data = []
+            for g_name, customers_list in locked_customer_details.items():
+                for c in customers_list:
+                    matrix_data.append({
+                        "District": c["District"],
+                        "Parent Company": c["Parent Company"],
+                        "Slab": c["Slab Amount"],
+                        "Quantity": c["Quantity Locked"]
+                    })
+            
+            df_matrix = pd.DataFrame(matrix_data)
+            
+            if not df_matrix.empty:
+                # Build the Pivot Table exactly how you requested
+                pivot_df = pd.pivot_table(
+                    df_matrix, 
+                    values='Quantity', 
+                    index=['District', 'Parent Company'], 
+                    columns='Slab', 
+                    aggfunc='sum', 
+                    fill_value=0
+                ).reset_index()
+                
+                # Sort the slab columns numerically so 10000 comes before 20000
+                slab_cols = [c for c in pivot_df.columns if c not in ['District', 'Parent Company']]
+                slab_cols = sorted(slab_cols)
+                
+                # Reorder the dataframe to put District and Parent Company first
+                final_cols = ['District', 'Parent Company'] + slab_cols
+                pivot_df = pivot_df[final_cols]
+                
+                # Add the word "Slab" to the top of the columns to make it look professional
+                rename_dict = {s: f"Slab {int(s)}" for s in slab_cols}
+                pivot_df.rename(columns=rename_dict, inplace=True)
+                
+                # Display the Matrix
+                st.dataframe(pivot_df, use_container_width=True)
+                
+                # Add the Download Button
+                csv_matrix = pivot_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Slab Matrix (CSV)", 
+                    data=csv_matrix, 
+                    file_name="Parent_Company_Slab_Matrix.csv", 
+                    mime="text/csv",
+                    type="primary",
+                    key="matrix_dl_btn"
+                )
+        # ==========================================
 
 # --------- TAB 5: DELIVER GIFTS ---------
 if tab5 is not None:
