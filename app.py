@@ -850,64 +850,107 @@ with tab4:
                 st.dataframe(df_details_locked, use_container_width=True)
                 st.download_button(label="Download CSV", data=df_details_locked.to_csv(index=False).encode('utf-8'), file_name=file_name_out_locked, mime="text/csv")
 # ==========================================
-        # 🧮 NEW FEATURE: PARENT COMPANY SLAB MATRIX
+        # 🧮 ADVANCED MATRIX REPORT (WITH TOTALS & WRAPPED HEADINGS)
         # ==========================================
         st.divider()
         st.write("### 🧮 Parent Company Slab Matrix Report")
-        st.write("This report shows exactly how many locked gift articles of each slab are assigned to each Parent Company.")
+        st.write("This report shows exactly how many locked gift articles of each slab are assigned, complete with District Totals and Grand Totals.")
         
-        if not locked_gift_counts:
+        # 1. Build the matrix data completely independently to protect your old features
+        matrix_data = []
+        for _, row_m in report_df_locked.iterrows():
+            sel_gift = str(row_m['selected_gift']).strip()
+            if not sel_gift:
+                continue
+                
+            # Smart Search: Try to find SO Name, fallback to Company Name if it doesn't exist
+            so_name = "Unknown"
+            for col in row_m.index:
+                clean_col = str(col).lower().replace(' ', '').replace('_', '')
+                if clean_col in ['soname', 'salesofficer', 'salesrep']:
+                    so_name = row_m[col]
+                    break
+            if so_name == "Unknown":
+                so_name = row_m.get('CompanyName', 'Unknown')
+                
+            items = [i.strip() for i in sel_gift.split(',')]
+            for item in items:
+                match = re.match(r"(.*) \(x(\d+)\)", item)
+                if match:
+                    g_name = match.group(1).strip()
+                    g_qty = int(match.group(2))
+                    if g_qty > 0:
+                        slab_val = int(gift_to_slab.get(g_name, 0))
+                        
+                        # Create the Excel wrapped-text heading (e.g., "Slab 10,000 \n (Silver Coin)")
+                        header_str = f"Slab {slab_val:,}\n({g_name})"
+                        
+                        matrix_data.append({
+                            "District": row_m['ParentCompanyDistrict'],
+                            "Parent Company": row_m['ParentCompanyName'],
+                            "SO Name": so_name,
+                            "Slab Header": header_str,
+                            "Slab Amount": slab_val,
+                            "Quantity": g_qty
+                        })
+                        
+        df_matrix = pd.DataFrame(matrix_data)
+        
+        if df_matrix.empty:
             st.info("No gifts have been locked yet, so the matrix is empty.")
         else:
-            # Flatten the existing locked data into a clean list
-            matrix_data = []
-            for g_name, customers_list in locked_customer_details.items():
-                for c in customers_list:
-                    matrix_data.append({
-                        "District": c["District"],
-                        "Parent Company": c["Parent Company"],
-                        "Slab": c["Slab Amount"],
-                        "Quantity": c["Quantity Locked"]
-                    })
+            # 2. Build the Pivot Table based on the 3 exact columns you asked for
+            pivot_df = pd.pivot_table(
+                df_matrix, 
+                values='Quantity', 
+                index=['District', 'Parent Company', 'SO Name'], 
+                columns='Slab Header', 
+                aggfunc='sum', 
+                fill_value=0
+            ).reset_index()
             
-            df_matrix = pd.DataFrame(matrix_data)
+            # 3. Sort the slab columns numerically lowest to highest
+            header_to_amount = df_matrix[['Slab Header', 'Slab Amount']].drop_duplicates().set_index('Slab Header')['Slab Amount'].to_dict()
+            slab_cols = [c for c in pivot_df.columns if c not in ['District', 'Parent Company', 'SO Name']]
+            slab_cols = sorted(slab_cols, key=lambda x: header_to_amount.get(x, 0))
             
-            if not df_matrix.empty:
-                # Build the Pivot Table exactly how you requested
-                pivot_df = pd.pivot_table(
-                    df_matrix, 
-                    values='Quantity', 
-                    index=['District', 'Parent Company'], 
-                    columns='Slab', 
-                    aggfunc='sum', 
-                    fill_value=0
-                ).reset_index()
-                
-                # Sort the slab columns numerically so 10000 comes before 20000
-                slab_cols = [c for c in pivot_df.columns if c not in ['District', 'Parent Company']]
-                slab_cols = sorted(slab_cols)
-                
-                # Reorder the dataframe to put District and Parent Company first
-                final_cols = ['District', 'Parent Company'] + slab_cols
-                pivot_df = pivot_df[final_cols]
-                
-                # Add the word "Slab" to the top of the columns to make it look professional
-                rename_dict = {s: f"Slab {int(s)}" for s in slab_cols}
-                pivot_df.rename(columns=rename_dict, inplace=True)
-                
-                # Display the Matrix
-                st.dataframe(pivot_df, use_container_width=True)
-                
-                # Add the Download Button
-                csv_matrix = pivot_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 Download Slab Matrix (CSV)", 
-                    data=csv_matrix, 
-                    file_name="Parent_Company_Slab_Matrix.csv", 
-                    mime="text/csv",
-                    type="primary",
-                    key="matrix_dl_btn"
-                )
+            # 4. Calculate District Totals
+            dist_totals = pivot_df.groupby('District')[slab_cols].sum().reset_index()
+            dist_totals['Parent Company'] = '👉 TOTAL FOR ' + dist_totals['District']
+            dist_totals['SO Name'] = ''
+            
+            # 5. Calculate the Grand Total
+            grand_total = pivot_df[slab_cols].sum().to_frame().T
+            grand_total['District'] = '🌟 GRAND TOTAL'
+            grand_total['Parent Company'] = ''
+            grand_total['SO Name'] = ''
+            
+            # 6. Combine everything safely using a Sort Key so the Totals drop to the bottom of each section
+            pivot_df['Sort_Key'] = 1
+            dist_totals['Sort_Key'] = 2
+            grand_total['Sort_Key'] = 3
+            
+            combined_df = pd.concat([pivot_df, dist_totals, grand_total], ignore_index=True)
+            combined_df = combined_df.sort_values(by=['District', 'Sort_Key', 'Parent Company', 'SO Name'])
+            combined_df = combined_df.drop(columns=['Sort_Key'])
+            
+            # 7. Final display order
+            final_cols = ['District', 'Parent Company', 'SO Name'] + slab_cols
+            combined_df = combined_df[final_cols]
+            
+            # Show on screen
+            st.dataframe(combined_df, use_container_width=True)
+            
+            # When downloaded to CSV, the "\n" code will automatically wrap the text in Excel!
+            csv_matrix = combined_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Advanced Matrix Report (CSV)", 
+                data=csv_matrix, 
+                file_name="Advanced_Slab_Matrix.csv", 
+                mime="text/csv",
+                type="primary",
+                key="matrix_dl_btn_advanced"
+            )
         # ==========================================
 
 # --------- TAB 5: DELIVER GIFTS ---------
