@@ -940,29 +940,31 @@ with tab4:
             )
         # ==========================================
 # ==========================================
-        # 🎁 SPECIAL AGARBATHI CALCULATION REPORT (SO MAPPED)
+        # 🎁 SPECIAL AGARBATHI CALCULATION REPORT (SO MAPPED & CASE LOGIC)
         # ==========================================
-        st.divider()
-        st.write("### 🎁 Special Agarbathi Calculation Report (SO Wise)")
-        st.write("Calculates Darbar 200g/Baba Harathi packets, mapped by SO, sorted, with highlighted bold totals.")
+        import math  # Added to handle ceiling rounding for cases
         
-        # Hardcoded SO Mapping based on District Names
+        st.divider()
+        st.write("### 🎁 Special Agarbathi Calculation Report (SO Wise & Master Cases)")
+        st.write("Calculates Free Packets based on adjourn value, rounds up to Master Cases, and calculates Billed Packets.")
+        
+        # Hardcoded SO Mapping based on District Names (Proper Case for perfect A-Z sorting)
         def get_so_name(district_name):
             dist_str = str(district_name).upper()
             if "GUNTUR" in dist_str or "KRISHNA" in dist_str or "NELLORE" in dist_str or "PRAKASAM" in dist_str:
-                return "karunakar"
+                return "Karunakar"
             elif "EAST GOD" in dist_str or "SRIKAKULAM" in dist_str or "VISAKHAPATNAM" in dist_str or "VIZIANAGARAM" in dist_str or "WEST GOD" in dist_str:
-                return "kiran"
+                return "Kiran"
             elif "ODISHA" in dist_str:
-                return "shyam"
+                return "Shyam"
             elif "RANGAREDDY" in dist_str:
-                return "swamyso"
+                return "Swamyso"
             elif "KARIMNAGAR" in dist_str or "KHAMMAM" in dist_str or "NALGONDA" in dist_str or "WARANGAL" in dist_str:
-                return "UPENDRA"
+                return "Upendra"
             elif "ANANTHAPUR" in dist_str or "CHITTOOR" in dist_str or "KADAPA" in dist_str or "KURNOOL" in dist_str:
-                return "venky"
+                return "Venky"
             elif "ADILABAD" in dist_str or "MAHABUB" in dist_str or "MEDAK" in dist_str or "NIZAMABAD" in dist_str:
-                return "VITTAL DEV"
+                return "Vittal Dev"
             return "Unknown SO"
 
         special_data = []
@@ -995,7 +997,7 @@ with tab4:
                                 agg_dict[key] = {300000: 0, 500000: 0, 1000000: 0}
                             agg_dict[key][slab_val] += g_qty
 
-        # 2. Process the Custom Math and Hardcoded Rules
+        # 2. Process the Custom Math, Case Rounding, and Hardcoded Rules
         for (so_name, dist, parent), slabs in agg_dict.items():
             qty_3l = slabs[300000]
             qty_5l = slabs[500000]
@@ -1007,13 +1009,20 @@ with tab4:
             if total_val > 0:
                 parent_upper = str(parent).upper()
                 
-                # Hardcoded logic specifically for Sathish Agencies, Miryalguda
+                # Logic specifically for Sathish Agencies, Miryalguda
                 if "SATHISH AGENCIES" in parent_upper and "MIRYALGUDA" in parent_upper:
                     product_name = "Baba Harathi 100g"
-                    packets = int(total_val / 36.13)
+                    case_size = 120
+                    free_packets = int(total_val / 36.13)
                 else:
-                    product_name = "Darbar 200g"
-                    packets = int(total_val / 94.59)
+                    product_name = "Durbar 200g"
+                    case_size = 65
+                    free_packets = int(total_val / 94.59)
+                
+                # Master Case Ceiling Logic
+                required_cases = math.ceil(free_packets / case_size)
+                total_packets_dispatched = required_cases * case_size
+                billed_packets = total_packets_dispatched - free_packets
                     
                 special_data.append({
                     "SO Name": so_name,
@@ -1024,7 +1033,10 @@ with tab4:
                     "10 Lakhs Slab": qty_10l,
                     "Total Adjourn Value (₹)": total_val,
                     "Product Allocated": product_name,
-                    "Total Packets": packets
+                    "Free Packets": free_packets,
+                    "Master Cases Required": required_cases,
+                    "Total Packets Dispatched": total_packets_dispatched,
+                    "Billed Packets": billed_packets
                 })
                 
         df_special = pd.DataFrame(special_data)
@@ -1033,11 +1045,11 @@ with tab4:
             st.info("No 3L, 5L, or 10L slabs have been locked yet for this selection.")
         else:
             # 3. Calculate District and Grand Totals safely
-            dist_cols_to_sum = ["3 Lakhs Slab", "5 Lakhs Slab", "10 Lakhs Slab", "Total Adjourn Value (₹)", "Total Packets"]
+            dist_cols_to_sum = ["3 Lakhs Slab", "5 Lakhs Slab", "10 Lakhs Slab", "Total Adjourn Value (₹)", "Free Packets", "Master Cases Required", "Total Packets Dispatched", "Billed Packets"]
             
-            # Group by SO Name AND District so the totals stay grouped properly
             dist_totals = df_special.groupby(['SO Name', 'District'])[dist_cols_to_sum].sum().reset_index()
-            dist_totals['Parent Company'] = '👉 TOTAL FOR ' + dist_totals['District'].astype(str).str.upper()
+            # Changed wording to "ADILABAD TOTAL" format
+            dist_totals['Parent Company'] = '👉 ' + dist_totals['District'].astype(str).str.upper() + ' TOTAL'
             dist_totals['Product Allocated'] = ''
             dist_totals['Sort_Key'] = 2
             
@@ -1050,7 +1062,7 @@ with tab4:
             
             df_special['Sort_Key'] = 1
             
-            # Combine everything and Sort SO Wise
+            # Combine everything and Sort A-Z by SO Name
             combined_special = pd.concat([df_special, dist_totals, grand_total], ignore_index=True)
             combined_special = combined_special.sort_values(by=['SO Name', 'District', 'Sort_Key', 'Parent Company'])
             
@@ -1058,13 +1070,13 @@ with tab4:
             display_special = combined_special.copy()
             display_special["Total Adjourn Value (₹)"] = display_special["Total Adjourn Value (₹)"].apply(lambda x: f"₹ {x:,.0f}" if pd.notnull(x) else "")
             
-            # Final columns list
-            final_spec_cols = ["SO Name", "District", "Parent Company", "3 Lakhs Slab", "5 Lakhs Slab", "10 Lakhs Slab", "Total Adjourn Value (₹)", "Product Allocated", "Total Packets"]
+            # Final columns list including all the new calculations
+            final_spec_cols = ["SO Name", "District", "Parent Company", "3 Lakhs Slab", "5 Lakhs Slab", "10 Lakhs Slab", "Total Adjourn Value (₹)", "Product Allocated", "Free Packets", "Master Cases Required", "Total Packets Dispatched", "Billed Packets"]
             display_special = display_special[final_spec_cols]
             
             # 4. HIGHLIGHT THE TOTALS BOLD IN STREAMLIT
             def highlight_totals(row):
-                if "👉 TOTAL FOR" in str(row['Parent Company']) or "🌟 GRAND TOTAL" in str(row['District']):
+                if " TOTAL" in str(row['Parent Company']) or "🌟 GRAND TOTAL" in str(row['District']):
                     return ['background-color: #e6f2ff; font-weight: bold; color: black'] * len(row)
                 return [''] * len(row)
                 
@@ -1073,12 +1085,12 @@ with tab4:
             # Show on Screen
             st.dataframe(styled_df, use_container_width=True)
             
-            # Add Download Button (Using the raw combined dataframe so Excel numbers don't break)
+            # Add Download Button 
             csv_special = combined_special[final_spec_cols].to_csv(index=False).encode('utf-8')
             st.download_button(
-                label="📥 Download Special Agarbathi Report (CSV)", 
+                label="📥 Download Special Agarbathi Master Case Report (CSV)", 
                 data=csv_special, 
-                file_name="Special_Agarbathi_Calculation_SOWise.csv", 
+                file_name="Special_Agarbathi_Case_Calculation.csv", 
                 mime="text/csv",
                 type="primary",
                 key="special_agarbathi_dl_btn"
