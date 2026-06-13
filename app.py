@@ -939,6 +939,123 @@ with tab4:
                 key="matrix_dl_btn_advanced"
             )
         # ==========================================
+# ==========================================
+        # 🎁 SPECIAL AGARBATHI CALCULATION REPORT (3L, 5L, 10L)
+        # ==========================================
+        st.divider()
+        st.write("### 🎁 Special Agarbathi Calculation Report (3L, 5L, 10L)")
+        st.write("Calculates Darbar 200g packets for 3L, 5L, and 10L slabs, with a custom Baba Harathi 100g exception for Sathish Agencies.")
+        
+        special_data = []
+        agg_dict = {}
+        
+        # 1. Look through all locked gifts and count only the 3L, 5L, and 10L slabs
+        for _, row_m in report_df_locked.iterrows():
+            sel_gift = str(row_m['selected_gift']).strip()
+            if not sel_gift:
+                continue
+                
+            dist = row_m['ParentCompanyDistrict']
+            parent_exact = row_m['ParentCompanyName']
+            
+            items = [i.strip() for i in sel_gift.split(',')]
+            for item in items:
+                match = re.match(r"(.*) \(x(\d+)\)", item)
+                if match:
+                    g_name = match.group(1).strip()
+                    g_qty = int(match.group(2))
+                    
+                    if g_qty > 0:
+                        slab_val = int(gift_to_slab.get(g_name, 0))
+                        
+                        # Only care about 3 Lakhs, 5 Lakhs, and 10 Lakhs
+                        if slab_val in [300000, 500000, 1000000]:
+                            key = (dist, parent_exact)
+                            if key not in agg_dict:
+                                agg_dict[key] = {300000: 0, 500000: 0, 1000000: 0}
+                            agg_dict[key][slab_val] += g_qty
+
+        # 2. Process the Custom Math and Hardcoded Rules
+        for (dist, parent), slabs in agg_dict.items():
+            qty_3l = slabs[300000]
+            qty_5l = slabs[500000]
+            qty_10l = slabs[1000000]
+            
+            # Adjourn Value Calculation
+            total_val = (qty_3l * 11000) + (qty_5l * 22000) + (qty_10l * 55000)
+            
+            if total_val > 0:
+                parent_upper = str(parent).upper()
+                
+                # Hardcoded logic specifically for Sathish Agencies, Miryalguda
+                if "SATHISH AGENCIES" in parent_upper and "MIRYALGUDA" in parent_upper:
+                    product_name = "Baba Harathi 100g"
+                    # Rate is 36.13, int() automatically rounds down
+                    packets = int(total_val / 36.13)
+                else:
+                    product_name = "Darbar 200g"
+                    # Rate is 94.59, int() automatically rounds down
+                    packets = int(total_val / 94.59)
+                    
+                special_data.append({
+                    "District": dist,
+                    "Parent Company": parent,
+                    "3 Lakhs Slab": qty_3l,
+                    "5 Lakhs Slab": qty_5l,
+                    "10 Lakhs Slab": qty_10l,
+                    "Total Adjourn Value (₹)": total_val,
+                    "Product Allocated": product_name,
+                    "Total Packets": packets
+                })
+                
+        df_special = pd.DataFrame(special_data)
+        
+        if df_special.empty:
+            st.info("No 3L, 5L, or 10L slabs have been locked yet for this selection.")
+        else:
+            # 3. Calculate District and Grand Totals safely
+            dist_cols_to_sum = ["3 Lakhs Slab", "5 Lakhs Slab", "10 Lakhs Slab", "Total Adjourn Value (₹)", "Total Packets"]
+            
+            dist_totals = df_special.groupby('District')[dist_cols_to_sum].sum().reset_index()
+            dist_totals['Parent Company'] = '👉 TOTAL FOR ' + dist_totals['District']
+            dist_totals['Product Allocated'] = ''
+            dist_totals['Sort_Key'] = 2
+            
+            grand_total = df_special[dist_cols_to_sum].sum().to_frame().T
+            grand_total['District'] = '🌟 GRAND TOTAL'
+            grand_total['Parent Company'] = ''
+            grand_total['Product Allocated'] = ''
+            grand_total['Sort_Key'] = 3
+            
+            df_special['Sort_Key'] = 1
+            
+            # Combine everything so the totals sit at the bottom of the groups
+            combined_special = pd.concat([df_special, dist_totals, grand_total], ignore_index=True)
+            combined_special = combined_special.sort_values(by=['District', 'Sort_Key', 'Parent Company'])
+            combined_special = combined_special.drop(columns=['Sort_Key'])
+            
+            # Format the currency column so it looks clean with commas
+            display_special = combined_special.copy()
+            display_special["Total Adjourn Value (₹)"] = display_special["Total Adjourn Value (₹)"].apply(lambda x: f"₹ {x:,.0f}")
+            
+            # Reorder columns to make sure they match your exact request
+            final_spec_cols = ["District", "Parent Company", "3 Lakhs Slab", "5 Lakhs Slab", "10 Lakhs Slab", "Total Adjourn Value (₹)", "Product Allocated", "Total Packets"]
+            display_special = display_special[final_spec_cols]
+            
+            # Show on Screen
+            st.dataframe(display_special, use_container_width=True)
+            
+            # Add Download Button
+            csv_special = combined_special[final_spec_cols].to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Special Agarbathi Report (CSV)", 
+                data=csv_special, 
+                file_name="Special_Agarbathi_Calculation.csv", 
+                mime="text/csv",
+                type="primary",
+                key="special_agarbathi_dl_btn"
+            )
+        # ==========================================
 # --------- TAB 5: DELIVER GIFTS ---------
 if tab5 is not None:
     with tab5:
