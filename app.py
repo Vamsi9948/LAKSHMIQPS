@@ -940,12 +940,31 @@ with tab4:
             )
         # ==========================================
 # ==========================================
-        # 🎁 SPECIAL AGARBATHI CALCULATION REPORT (3L, 5L, 10L)
+        # 🎁 SPECIAL AGARBATHI CALCULATION REPORT (SO MAPPED)
         # ==========================================
         st.divider()
-        st.write("### 🎁 Special Agarbathi Calculation Report (3L, 5L, 10L)")
-        st.write("Calculates Darbar 200g packets for 3L, 5L, and 10L slabs, with a custom Baba Harathi 100g exception for Sathish Agencies.")
+        st.write("### 🎁 Special Agarbathi Calculation Report (SO Wise)")
+        st.write("Calculates Darbar 200g/Baba Harathi packets, mapped by SO, sorted, with highlighted bold totals.")
         
+        # Hardcoded SO Mapping based on District Names
+        def get_so_name(district_name):
+            dist_str = str(district_name).upper()
+            if "GUNTUR" in dist_str or "KRISHNA" in dist_str or "NELLORE" in dist_str or "PRAKASAM" in dist_str:
+                return "karunakar"
+            elif "EAST GOD" in dist_str or "SRIKAKULAM" in dist_str or "VISAKHAPATNAM" in dist_str or "VIZIANAGARAM" in dist_str or "WEST GOD" in dist_str:
+                return "kiran"
+            elif "ODISHA" in dist_str:
+                return "shyam"
+            elif "RANGAREDDY" in dist_str:
+                return "swamyso"
+            elif "KARIMNAGAR" in dist_str or "KHAMMAM" in dist_str or "NALGONDA" in dist_str or "WARANGAL" in dist_str:
+                return "UPENDRA"
+            elif "ANANTHAPUR" in dist_str or "CHITTOOR" in dist_str or "KADAPA" in dist_str or "KURNOOL" in dist_str:
+                return "venky"
+            elif "ADILABAD" in dist_str or "MAHABUB" in dist_str or "MEDAK" in dist_str or "NIZAMABAD" in dist_str:
+                return "VITTAL DEV"
+            return "Unknown SO"
+
         special_data = []
         agg_dict = {}
         
@@ -957,6 +976,7 @@ with tab4:
                 
             dist = row_m['ParentCompanyDistrict']
             parent_exact = row_m['ParentCompanyName']
+            so_name = get_so_name(dist)  # Apply the hardcoded mapping
             
             items = [i.strip() for i in sel_gift.split(',')]
             for item in items:
@@ -970,13 +990,13 @@ with tab4:
                         
                         # Only care about 3 Lakhs, 5 Lakhs, and 10 Lakhs
                         if slab_val in [300000, 500000, 1000000]:
-                            key = (dist, parent_exact)
+                            key = (so_name, dist, parent_exact)
                             if key not in agg_dict:
                                 agg_dict[key] = {300000: 0, 500000: 0, 1000000: 0}
                             agg_dict[key][slab_val] += g_qty
 
         # 2. Process the Custom Math and Hardcoded Rules
-        for (dist, parent), slabs in agg_dict.items():
+        for (so_name, dist, parent), slabs in agg_dict.items():
             qty_3l = slabs[300000]
             qty_5l = slabs[500000]
             qty_10l = slabs[1000000]
@@ -990,14 +1010,13 @@ with tab4:
                 # Hardcoded logic specifically for Sathish Agencies, Miryalguda
                 if "SATHISH AGENCIES" in parent_upper and "MIRYALGUDA" in parent_upper:
                     product_name = "Baba Harathi 100g"
-                    # Rate is 36.13, int() automatically rounds down
                     packets = int(total_val / 36.13)
                 else:
                     product_name = "Darbar 200g"
-                    # Rate is 94.59, int() automatically rounds down
                     packets = int(total_val / 94.59)
                     
                 special_data.append({
+                    "SO Name": so_name,
                     "District": dist,
                     "Parent Company": parent,
                     "3 Lakhs Slab": qty_3l,
@@ -1016,12 +1035,14 @@ with tab4:
             # 3. Calculate District and Grand Totals safely
             dist_cols_to_sum = ["3 Lakhs Slab", "5 Lakhs Slab", "10 Lakhs Slab", "Total Adjourn Value (₹)", "Total Packets"]
             
-            dist_totals = df_special.groupby('District')[dist_cols_to_sum].sum().reset_index()
-            dist_totals['Parent Company'] = '👉 TOTAL FOR ' + dist_totals['District']
+            # Group by SO Name AND District so the totals stay grouped properly
+            dist_totals = df_special.groupby(['SO Name', 'District'])[dist_cols_to_sum].sum().reset_index()
+            dist_totals['Parent Company'] = '👉 TOTAL FOR ' + dist_totals['District'].astype(str).str.upper()
             dist_totals['Product Allocated'] = ''
             dist_totals['Sort_Key'] = 2
             
             grand_total = df_special[dist_cols_to_sum].sum().to_frame().T
+            grand_total['SO Name'] = '🌟'
             grand_total['District'] = '🌟 GRAND TOTAL'
             grand_total['Parent Company'] = ''
             grand_total['Product Allocated'] = ''
@@ -1029,28 +1050,35 @@ with tab4:
             
             df_special['Sort_Key'] = 1
             
-            # Combine everything so the totals sit at the bottom of the groups
+            # Combine everything and Sort SO Wise
             combined_special = pd.concat([df_special, dist_totals, grand_total], ignore_index=True)
-            combined_special = combined_special.sort_values(by=['District', 'Sort_Key', 'Parent Company'])
-            combined_special = combined_special.drop(columns=['Sort_Key'])
+            combined_special = combined_special.sort_values(by=['SO Name', 'District', 'Sort_Key', 'Parent Company'])
             
             # Format the currency column so it looks clean with commas
             display_special = combined_special.copy()
-            display_special["Total Adjourn Value (₹)"] = display_special["Total Adjourn Value (₹)"].apply(lambda x: f"₹ {x:,.0f}")
+            display_special["Total Adjourn Value (₹)"] = display_special["Total Adjourn Value (₹)"].apply(lambda x: f"₹ {x:,.0f}" if pd.notnull(x) else "")
             
-            # Reorder columns to make sure they match your exact request
-            final_spec_cols = ["District", "Parent Company", "3 Lakhs Slab", "5 Lakhs Slab", "10 Lakhs Slab", "Total Adjourn Value (₹)", "Product Allocated", "Total Packets"]
+            # Final columns list
+            final_spec_cols = ["SO Name", "District", "Parent Company", "3 Lakhs Slab", "5 Lakhs Slab", "10 Lakhs Slab", "Total Adjourn Value (₹)", "Product Allocated", "Total Packets"]
             display_special = display_special[final_spec_cols]
             
-            # Show on Screen
-            st.dataframe(display_special, use_container_width=True)
+            # 4. HIGHLIGHT THE TOTALS BOLD IN STREAMLIT
+            def highlight_totals(row):
+                if "👉 TOTAL FOR" in str(row['Parent Company']) or "🌟 GRAND TOTAL" in str(row['District']):
+                    return ['background-color: #e6f2ff; font-weight: bold; color: black'] * len(row)
+                return [''] * len(row)
+                
+            styled_df = display_special.style.apply(highlight_totals, axis=1)
             
-            # Add Download Button
+            # Show on Screen
+            st.dataframe(styled_df, use_container_width=True)
+            
+            # Add Download Button (Using the raw combined dataframe so Excel numbers don't break)
             csv_special = combined_special[final_spec_cols].to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Download Special Agarbathi Report (CSV)", 
                 data=csv_special, 
-                file_name="Special_Agarbathi_Calculation.csv", 
+                file_name="Special_Agarbathi_Calculation_SOWise.csv", 
                 mime="text/csv",
                 type="primary",
                 key="special_agarbathi_dl_btn"
