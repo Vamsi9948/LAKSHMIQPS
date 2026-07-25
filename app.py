@@ -182,6 +182,11 @@ if not st.session_state.logged_in:
         username = st.text_input("Username (Admin / District / PCID)")
         password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Login")
+
+            if st.button("🔄 Force Refresh Database"):
+        st.cache_data.clear()
+        st.success("Memory cleared! Fetching fresh data from Neon...")
+        st.rerun()
         
         if submitted:
             if username.lower() == 'admin' and password == 'admin123':
